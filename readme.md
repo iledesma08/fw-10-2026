@@ -89,7 +89,8 @@ Ir a directorio de FW.
 ```terminal
 cd fw
 make clean
-make```
+make
+```
 
 
 ## Simulación de RTL:
