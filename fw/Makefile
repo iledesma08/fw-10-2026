@@ -1,7 +1,15 @@
-# Toolchain
+# Toolchain: usa /opt/riscv si existe (setup clasico compilado),
+# si no, cae al cross-compiler del PATH (apt/docker).
+# (No usar ?= para CC: make ya lo define como `cc` por defecto.)
+ifeq ($(wildcard /opt/riscv/bin/riscv64-unknown-elf-gcc),)
+CC      = riscv64-unknown-elf-gcc
+OBJDUMP = riscv64-unknown-elf-objdump
+OBJCOPY = riscv64-unknown-elf-objcopy
+else
 CC      = /opt/riscv/bin/riscv64-unknown-elf-gcc
 OBJDUMP = /opt/riscv/bin/riscv64-unknown-elf-objdump
 OBJCOPY = /opt/riscv/bin/riscv64-unknown-elf-objcopy
+endif
 
 # Files
 ELF = current.elf
