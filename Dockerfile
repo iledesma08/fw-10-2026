@@ -20,6 +20,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     make git python3 \
+    g++ \
     verilator gtkwave \
     bsdextrautils \
     gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf \
