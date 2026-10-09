@@ -162,7 +162,8 @@ module adc #(
     always @(posedge i_clk or negedge i_rst_n) begin
         if (!i_rst_n) begin
             for (int i = 0 ; i< N_SAMPLES; i ++) begin
-               sample_mem[i] <= '0;
+               // blocking: Verilator 5 no acepta <= a arrays dentro de for loops (BLKLOOPINIT)
+               sample_mem[i] = '0;
             end
         end else if (state == ST_CAPT && sample_tick) begin 
             sample_mem[samp_cnt]  <= quant_sample;
