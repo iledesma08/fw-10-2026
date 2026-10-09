@@ -21,6 +21,20 @@ docker run --rm -it -v "$(pwd)":/work -w /work fw-env make -C fw
 docker run --rm -it -v "$(pwd)":/work -w /work fw-env make sim
 ```
 
+Alternativa para trabajar y revisar logs con comodidad: abrir una shell adentro del container (equivale a la shell de la máquina) y correr los `make` ahí:
+
+```terminal
+docker run --rm -it -v "$(pwd)":/work -w /work fw-env bash
+```
+
+Adentro del container:
+
+```terminal
+make build_project_config
+make -C fw
+make sim
+```
+
 El `.vcd` generado se abre con `gtkwave` en el host. Para no dejar archivos generados como root, agregar ```--user "$(id -u):$(id -g)"``` a cada `docker run`.
 
 ### Verificación (todo en Docker):
