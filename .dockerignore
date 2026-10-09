@@ -1,0 +1,8 @@
+.git
+obj_dir/
+*.vcd
+*.fst
+fw/*.elf
+fw/*.bin
+fw/fw.hex
+submodules/riscv-gnu-toolchain/
