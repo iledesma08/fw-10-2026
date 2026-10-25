@@ -18,6 +18,7 @@ STATIC_LIB= $(BUILD_DIR)/libutils.a
 SRCS  = src/app/main.c
 SRCS += src/lib/mathlib.c
 SRCS += src/lib/strutils.c
+SRCS += src/hal/hal_uart.c
 
 USE_STATIC_LIB = 0
 LIB_SRCS =

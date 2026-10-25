@@ -5,6 +5,7 @@
 
 #include "mathlib.h"
 #include "strutils.h"
+#include "hal_uart.h"
 #include "print.h"
 
 int main(void)
@@ -12,6 +13,8 @@ int main(void)
     strbuf_t sb;
     char trimmed[STR_MAX_LEN];
     static const uint8_t payload[] = { 0x01U, 0x02U, 0x03U, 0x04U };
+    static const uint8_t uart_msg[] = { 'O', 'K' };
+    uart_regs_t uart;
     uint8_t crc;
 
     print_str("factorial(5) = ");
@@ -48,6 +51,17 @@ int main(void)
     crc = str_crc8(payload, sizeof(payload));
     print_str("crc8: 0x");
     print_hex((unsigned int)crc, 2);
+    print_str("\n");
+
+    uart_init(&uart, 115200U);
+    uart_send(&uart, uart_msg, (uint32_t)sizeof(uart_msg));
+
+    print_str("uart BRR=");
+    print_dec((unsigned int)uart.BRR);
+    print_str(" SR=0x");
+    print_hex((unsigned int)uart.SR, 8);
+    print_str(" DR=0x");
+    print_hex((unsigned int)uart.DR, 8);
     print_str("\n");
 
     return 0;
