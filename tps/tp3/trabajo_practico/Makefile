@@ -21,6 +21,7 @@ SRCS += src/lib/strutils.c
 SRCS += src/hal/hal_uart.c
 SRCS += src/hal/hal_ring.c
 SRCS += src/hal/hal_timer.c
+SRCS += src/demo/demo_embedded.c
 
 USE_STATIC_LIB = 0
 LIB_SRCS =

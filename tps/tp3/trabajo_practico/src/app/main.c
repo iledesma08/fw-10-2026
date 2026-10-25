@@ -7,6 +7,7 @@
 #include "strutils.h"
 #include "hal_uart.h"
 #include "hal_ring.h"
+#include "demo.h"
 #include "print.h"
 
 int main(void)
@@ -75,6 +76,8 @@ int main(void)
     while (ring_pop(&ring, &byte) == 0)
         print_chr((char)byte);
     print_str("\n");
+
+    demo_embedded();
 
     return 0;
 }
