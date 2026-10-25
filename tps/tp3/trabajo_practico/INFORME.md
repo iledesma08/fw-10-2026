@@ -187,3 +187,77 @@ Cosas a tener en cuenta:
 - **La granularidad es el objeto, no la función:** si se extrae un miembro, se trae completo; `-ffunction-sections` y `--gc-sections` pueden descartar después las funciones no usadas dentro de ese miembro.
 
 En este TP, `ar t build/libutils.a` muestra los cinco miembros (`mathlib.o`, `strutils.o`, `hal_uart.o`, `hal_ring.o` y `hal_timer.o`), y el ejecutable sigue produciendo exactamente la misma salida que antes del cambio.
+
+## Hito 12 — Optimización
+
+### Medición
+
+La versión normal se compila con `make`, que usa `CFLAGS` con `-O0` y `-g`. La optimizada se compila con `make opt`, que usa `OPT_FLAGS` con `-O2 -DNDEBUG`:
+
+| Ejecutable | Optimización | `text` | `data` | `bss` | `dec` |
+|------------|--------------|-------:|-------:|------:|------:|
+| `building_process_demo` | `-O0` | 6894 | 600 | 112 | 7606 |
+| `building_process_demo_opt` | `-O2` | 5457 | 600 | 104 | 6161 |
+| Diferencia | | -1437 (-20,8 %) | 0 | -8 (-7,1 %) | -1445 (-19,0 %) |
+
+### Por qué cambia `text`
+
+`text` baja 1437 bytes porque `-O2` aplica optimizaciones que `-O0` no hace: propagación de constantes, eliminación de código muerto, mejor asignación de registros, simplificación de bucles, reemplazo de secuencias de instrucciones por equivalentes más cortas e inlining de funciones dentro de una misma unidad de compilación.
+
+El efecto se ve en funciones concretas. Podemos analizar sus tamaños por función con `nm -S --size-sort`.
+
+```bash
+nm -S --size-sort build/building_process_demo | grep -E ' (t|T) '
+nm -S --size-sort build/building_process_demo_opt | grep -E ' (t|T) '
+```
+
+| Función | `-O0` (bytes) | `-O2` (bytes) |
+|---------|--------------:|--------------:|
+| `demo_embedded` | 792 | 594 |
+| `str_trim` | 395 | 215 |
+| `demo_str` | 301 | 248 |
+| `demo_math` | 251 | 203 |
+| `ring_pop` | 120 | 54 |
+| `ring_push` | 118 | 54 |
+| `math_is_prime` | 186 | 199 |
+| `math_factorial` | 67 | 79 |
+
+`demo_embedded` mide `0x318` en `-O0` y `0x252` en `-O2`, que equivalen a 792 y 594 bytes.
+
+Es importante destacar que no todo se achica: `math_is_prime` y `math_factorial` crecen un poco porque `-O2` elige otra secuencia de instrucciones (por ejemplo, desenrolla o especializa bucles).
+
+De esta forma, **la reducción total es la suma de lo que baja y lo que sube.**
+
+Además, algunas funciones desaparecen como símbolo independiente: `bit_set`, `ring_is_empty`, `ring_is_full`, `strbuf_append` y `uart_send_byte`. No es que no se usen: el compilador las inlinea en sus llamadores, la versión suelta queda sin referencias y `--gc-sections` descarta su sección.
+
+### Por qué `data` no cambia y `bss` un poquito?
+
+`data` y `bss` son las dos zonas de variables globales:
+
+- `.data`: variables globales inicializadas con un valor distinto de cero. Sus valores se guardan en el archivo y se copian a RAM al arrancar.
+- `.bss`: variables globales que arrancan en cero (o sin inicializador explícito). No se guardan los ceros en el archivo: solo se reserva el tamaño, y el arranque pone esa zona en cero. Por eso `bss` ocupa RAM pero no flash.
+
+`size` no informa solo la sección `.data`: su columna `data` agrupa todas las secciones inicializadas y escribibles. En este binario son `.dynamic` (496), `.got` (80), `.data` (8), `.init_array` (8) y `.fini_array` (8), que suman los 600 bytes. Se puede comprobar con:
+
+```bash
+size -A build/building_process_demo
+```
+
+La sección `.data` mide 8 bytes y no viene de las demos: las demos no tienen variables globales que vayan a `.data`. Sus `static const` (`payload`, `msg`) van a `.rodata`, y los buffers grandes (`sb`, `trimmed`, `frame`, `received`) son locales y viven en el stack. Las únicas variables globales de las demos que van a `.bss` son `sim_uart` y `sim_ring`, que no tienen inicializador. Como `-O2` no cambia esas declaraciones, `data` queda igual.
+
+`bss` baja solo 8 bytes (112 → 104). Los tamaños de los símbolos se ven con `nm -S --size-sort` (la segunda columna es el tamaño en hexadecimal):
+
+```bash
+nm -S --size-sort build/building_process_demo | grep -E ' [bB] '
+```
+
+```text
+0000000000005020 0000000000000001 b completed.0
+0000000000005088 0000000000000004 b timer_ms
+0000000000005030 0000000000000014 b sim_uart
+0000000000005060 0000000000000026 b sim_ring
+```
+
+`0x14` son 20 bytes de `sim_uart`, `0x26` son 38 de `sim_ring` y `0x4` son 4 de `timer_ms`; `completed.0` es una variable interna del código de arranque. La suma de los símbolos no da exactamente 112 porque el linker agrega padding para alinear cada símbolo. En `-O2` cambia el orden y el padding, y además aparece una copia de `stdout` de 8 bytes que en `-O0` no estaba. El total baja 8 por el padding, no porque las demos usen menos RAM.
+
+> En resumen: `-O2` reduce el código un 20,8 % y el total un 19,0 %, mientras que `data` y `bss` quedan prácticamente iguales porque el programa tiene pocas variables globales. En un firmware embebido esa diferencia se traduce directamente en menos flash ocupada y la RAM no cambia de forma apreciable.
