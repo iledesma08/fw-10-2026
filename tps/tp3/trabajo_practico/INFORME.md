@@ -261,3 +261,117 @@ nm -S --size-sort build/building_process_demo | grep -E ' [bB] '
 `0x14` son 20 bytes de `sim_uart`, `0x26` son 38 de `sim_ring` y `0x4` son 4 de `timer_ms`; `completed.0` es una variable interna del código de arranque. La suma de los símbolos no da exactamente 112 porque el linker agrega padding para alinear cada símbolo. En `-O2` cambia el orden y el padding, y además aparece una copia de `stdout` de 8 bytes que en `-O0` no estaba. El total baja 8 por el padding, no porque las demos usen menos RAM.
 
 > En resumen: `-O2` reduce el código un 20,8 % y el total un 19,0 %, mientras que `data` y `bss` quedan prácticamente iguales porque el programa tiene pocas variables globales. En un firmware embebido esa diferencia se traduce directamente en menos flash ocupada y la RAM no cambia de forma apreciable.
+
+## Hito 14 — Preguntas
+
+### 1. Tres símbolos de `mathlib.o` y su tipo según `nm`
+
+Esto ya lo vi en el hito 1: `T` es un símbolo definido en `.text` con alcance global, y `U` es *undefined*. El glosario del hito 11 agrega que una `t` minúscula sería local. Al correr:
+
+```bash
+nm build/lib/mathlib.o
+```
+
+aparece:
+
+```text
+0000000000000000 T math_factorial
+0000000000000000 T math_gcd
+0000000000000000 T math_is_prime
+0000000000000000 T math_isqrt
+```
+
+que podemos resumir como:
+
+| Símbolo | Tipo | Qué significa |
+|---------|------|---------------|
+| `math_factorial` | `T` | función global definida en `.text` |
+| `math_gcd` | `T` | función global definida en `.text` |
+| `math_isqrt` | `T` | función global definida en `.text` |
+
+`math_is_prime` también es `T`. Ninguno es `t` porque no son `static`.
+
+### 2. Símbolos que usa `demo_embedded.o` sin definirlos y dónde se resuelven
+
+En el hito 1 seguimos `main.o -> print.o -> print_host.o` y vimos que `U` significa que el objeto usa el símbolo pero no lo define. Ahora vamos con el caso de `demo_embedded.o`:
+
+```bash
+nm -u build/demo/demo_embedded.o
+```
+
+aparece:
+
+```text
+                 U print_chr
+                 U print_dec
+                 U print_hex
+                 U print_str
+                 U ring_init
+                 U ring_pop
+                 U ring_push
+                 U __stack_chk_fail
+                 U str_crc8
+                 U timer_get_ms
+                 U timer_init
+                 U timer_tick
+                 U uart_init
+                 U uart_send
+```
+
+osea:
+
+| Símbolo | Se resuelve en |
+|---------|----------------|
+| `print_str`, `print_dec`, `print_hex` | `build/platform/print.o` (ya estaba en el hito 1) |
+| `print_chr` | `build/platform/host/print_host.o` (también del hito 1) |
+| `ring_init`, `ring_push`, `ring_pop` | `hal_ring.o`, dentro de `build/libutils.a` |
+| `uart_init`, `uart_send` | `hal_uart.o`, dentro de `libutils.a` |
+| `timer_init`, `timer_tick`, `timer_get_ms` | `hal_timer.o`, dentro de `libutils.a` |
+| `str_crc8` | `strutils.o`, dentro de `libutils.a` |
+| `__stack_chk_fail` | libc (lo agrega el stack protector) |
+
+- Los `print_*` se enlazan directo porque `print.c` y `print_host.c` están en `PLATFORM_SRCS`, no en la biblioteca.
+- Los `hal_*` y `str_crc8` salen de `libutils.a`; el linker extrae solo los miembros que necesita.
+- `__stack_chk_fail` ya aparecía en `print.o` en el hito 1, lo mete GCC por el stack protector.
+
+### 3. ¿Cuál es la sección más grande del ejecutable?
+
+En el hito 12 ya vimos que `text` es la columna más grande del resumen de `size`, pero `text` no es una sección: es una suma de varias (`size` sin `-A` muestra `text = 7138`, pero eso no es una sola sección; es la suma de `.text` + `.rodata` + `.init` + `.plt*` + `.eh_frame*`, entre otras). Si se analiza sección por sección con:
+
+```bash
+size -A build/building_process_demo
+```
+
+la más grande entre las que se cargan en memoria es `.text`:
+
+```text
+.text        4366
+.eh_frame    1132
+.dynamic      496
+.rodata       260
+```
+
+`.text` son 4366 bytes en el build normal (`-O0 -g`); en el optimizado (`-O2`) baja a 3172. Es el código de la app, la biblioteca y la plataforma.
+
+### 4. Después del hito 11, ¿en qué miembro de `libutils.a` está `math_factorial`?
+
+En `mathlib.o`. Esto ya lo teníamos del hito 11, cuando listamos los miembros con `ar t`:
+
+```bash
+nm -A build/libutils.a | grep math_factorial
+```
+
+```text
+build/libutils.a:mathlib.o:0000000000000000 T math_factorial
+```
+
+El archivo tiene un miembro por cada `.c` de `LIB_SRCS`: `mathlib.o`, `strutils.o`, `hal_uart.o`, `hal_ring.o` y `hal_timer.o`.
+
+### 5. ¿Por qué la aplicación necesita `-lutils` para enlazar, pero `libutils.a` no necesita a la aplicación?
+
+La dependencia va para un solo lado. La base está en el hito 11: `-lutils` le dice al linker que busque en `libutils.a` los símbolos que quedaron sin resolver, y por eso va después de los `.o` de la app.
+
+- La app (`main.o`, `demo_*.o`) tiene referencias sin definir a `math_*`, `str_*`, `uart_*`, etc. Sin `-lutils`, el linker no sabe dónde están y falla con `undefined reference`.
+- `libutils.a` es una colección pasiva de objetos: no es un ejecutable, no tiene `main` y no referencia nada de la app. Si se corre `nm -u build/libutils.a`, lo único indefinido que aparece es `__stack_chk_fail` de libc; no hay ninguna referencia a `main` ni a `demo_*`.
+
+> Por eso la app necesita a la lib, pero la lib no necesita a la app. La lib se arma con `ar` a partir de sus propios `.o`; recién en el enlace final el linker la usa para completar los símbolos que faltan.
