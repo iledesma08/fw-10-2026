@@ -1,12 +1,6 @@
-#include <stdio.h>
 #include "print.h"
+#include <stdio.h>
 
-void print_chr(char ch)
-{
-    putchar(ch);
-}
+void print_chr(char ch) { putchar(ch); }
 
-void print_flush_buffer(void)
-{
-    fflush(stdout);
-}
+void print_flush_buffer(void) { fflush(stdout); }

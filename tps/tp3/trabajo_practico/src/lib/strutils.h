@@ -6,16 +6,17 @@
 
 #define STR_MAX_LEN 128
 
-/** Valor inicial del CRC-8 en este laboratorio (las actividades de clase usan `0x00`). */
+/** Valor inicial del CRC-8 en este laboratorio (las actividades de clase usan
+ * `0x00`). */
 #define STR_CRC8_INIT 0xFF
 
 typedef struct {
-    char   data[STR_MAX_LEN];
-    size_t len;
+  char data[STR_MAX_LEN];
+  size_t len;
 } strbuf_t;
 
-void   strbuf_init(strbuf_t *buf);
-void   strbuf_set(strbuf_t *buf, const char *src);
+void strbuf_init(strbuf_t *buf);
+void strbuf_set(strbuf_t *buf, const char *src);
 size_t strbuf_append(strbuf_t *buf, const char *src);
 size_t strbuf_append_int(strbuf_t *buf, int32_t value);
 const char *strbuf_cstr(const strbuf_t *buf);
