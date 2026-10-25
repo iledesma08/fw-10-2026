@@ -22,6 +22,8 @@ SRCS += src/hal/hal_uart.c
 SRCS += src/hal/hal_ring.c
 SRCS += src/hal/hal_timer.c
 SRCS += src/demo/demo_embedded.c
+SRCS += src/demo/demo_math.c
+SRCS += src/demo/demo_str.c
 
 USE_STATIC_LIB = 0
 LIB_SRCS =
