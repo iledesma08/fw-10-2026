@@ -87,3 +87,103 @@ En base a esto, armé un cuadro comparativo de las cuatro categorías:
 | `PLATFORM_OBJS` | objetos que se compilan a partir de `PLATFORM_SRCS` | `patsubst src/%.c,$(BUILD_DIR)/%.o,$(PLATFORM_SRCS)` | `build/platform/print.o` y `build/platform/host/print_host.o` |
 
 En resumen: `SRCS` y `PLATFORM_SRCS` son listas de archivos fuente; `OBJS` y `PLATFORM_OBJS` son las listas de objetos que resultan de compilarlas. La regla de enlace del ejecutable usa `OBJS` y `PLATFORM_OBJS`, por eso los objetos de la plataforma terminan en el binario aunque no estén en `SRCS`.
+
+## Hito 11 — Biblioteca estática
+
+### Qué cambió en el Makefile
+
+Antes (`USE_STATIC_LIB = 0`) todos los `.c` estaban en `SRCS`: se compilaban a `.o` y el linker recibía todos los objetos sueltos en una sola línea.
+
+```make
+$(TARGET): $(OBJS) $(PLATFORM_OBJS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) $^ -o $@
+```
+
+Con `SRCS` incluyendo `lib/` y `hal/`, `OBJS` contenía `main.o`, los `demo_*.o`, `mathlib.o`, `strutils.o`, `hal_uart.o`, `hal_ring.o` y `hal_timer.o`; todos terminaban en el ejecutable.
+
+Ahora (`USE_STATIC_LIB = 1`) `lib/` y `hal/` salen de `SRCS` y pasan a `LIB_SRCS`. Sus objetos se archivan:
+
+```make
+$(STATIC_LIB): $(LIB_OBJS) | $(BUILD_DIR)
+	$(AR) rcs $@ $^
+	$(RANLIB) $@
+```
+
+y el ejecutable se enlaza contra el archivo en lugar de contra esos objetos:
+
+```make
+$(TARGET): $(APP_OBJS) $(PLATFORM_OBJS) $(STATIC_LIB) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(APP_OBJS) $(PLATFORM_OBJS) -L$(BUILD_DIR) -lutils -o $@
+```
+
+`SRCS` queda con `app/` y `demo/`, `LIB_SRCS` con `lib/` y `hal/`, y `USE_STATIC_LIB` en `1`.
+
+Para guardarlo a modo de repaso, cada expresión de Make significa lo siguiente:
+
+| Expresión | Significado |
+|-----------|-------------|
+| `objetivo: prerequisitos` | regla: para construir `objetivo` hacen falta esos `prerequisitos` |
+| `$(NOMBRE)` | expande la variable `NOMBRE` (por ejemplo, `$(CC)` pasa a ser `gcc`) |
+| `ifeq ... else ... endif` | condicional que Make evalúa al leer el Makefile |
+| `\| $(BUILD_DIR)` | prerequisito order-only: el directorio debe existir, pero que cambie su fecha no fuerza la reconstrucción |
+| `$@` | nombre del objetivo de la regla |
+| `$^` | todos los prerequisitos normales, separados por espacios (sin los order-only) |
+| `$<` | el primer prerequisito normal (se usa en las reglas de compilación) |
+| línea con TAB | cada comando de la receta debe empezar con un tabulador |
+
+### Qué es una biblioteca estática (Repaso para mi)
+
+Una biblioteca estática (`.a`) es un archivo contenedor, en formato `ar`, que agrupa varios `.o`. No es un programa ni algo que se cargue en tiempo de ejecución: es una colección de objetos con un índice de símbolos. El `s` de `ar rcs` y `ranlib` generan ese índice.
+
+Al enlazar, el linker recorre los objetos de la aplicación, ve qué símbolos quedan sin definir y busca en el archivo los miembros que los definen. Solo incorpora esos miembros al ejecutable; el resto queda afuera. El código de los miembros usados se copia dentro del binario final, así que en tiempo de ejecución no hace falta tener `libutils.a` al lado del programa. `ar t` lista los miembros y `nm` muestra los símbolos de cada uno.
+
+#### Glosario (repaso de la Clase 3)
+
+En la Clase 3 vimos que binutils incluye `ar` y `ranlib` para crear e indexar archives, y que `nm` lista símbolos. Estos son los términos que aparecen en este hito:
+
+| Término | Qué es / qué hace |
+|---------|-------------------|
+| `ar` | GNU archiver: crea y modifica archives (`.a`) |
+| archive / `.a` | archivo contenedor de varios `.o`; es el formato de una biblioteca estática |
+| `ar rcs lib.a a.o b.o` | `r` reemplaza o inserta miembros, `c` crea el archivo si no existe y `s` escribe el índice de símbolos |
+| `ranlib lib.a` | genera o actualiza el índice de símbolos del archive; es redundante después de `ar rcs` (la `s` ya lo hace) |
+| `ar t lib.a` | lista los miembros del archive (table of contents) |
+| `nm` | lista los símbolos de un objeto o archive: `T`/`t` texto (global/local), `D`/`d` data, `B`/`b` bss, `r` solo lectura, `W` weak |
+| `-Ldirectorio` | le dice al linker en qué directorio buscar bibliotecas |
+| `-lnombre` | le dice al linker que enlace con `libnombre.a` (o `libnombre.so`); acá `-lutils` busca `libutils.a` |
+| enlace estático | el código de la biblioteca se copia dentro del ejecutable al enlazar; el binario queda autónomo, sin dependencia en runtime, pero más grande |
+| enlace dinámico | la biblioteca (`.so`) se carga en memoria en tiempo de ejecución; el ejecutable es más chico, pero requiere la biblioteca en el sistema destino |
+| `--gc-sections` | el linker descarta las secciones de código y datos que nadie referencia |
+| `-ffunction-sections -fdata-sections` | compila cada función y cada dato en su propia sección, para que `--gc-sections` pueda eliminarlos por separado |
+
+En firmware embebido casi siempre se usan bibliotecas estáticas, por autonomía y control de memoria: el binario no depende de que la biblioteca esté instalada en la placa.
+
+### Diferencia con la forma anterior
+
+| Aspecto | Antes (`USE_STATIC_LIB = 0`) | Ahora (`USE_STATIC_LIB = 1`) |
+|---------|------------------------------|------------------------------|
+| Unidad de enlace | todos los `.o` sueltos | `libutils.a` + objetos de `app/`, `demo/` y `platform/` |
+| Qué recibe el linker | todos los objetos de `lib/` y `hal/` | el archivo `libutils.a` con `-lutils` |
+| Selección de código | se pasan todos los objetos; `--gc-sections` descarta lo no usado | solo se extraen los miembros que resuelven símbolos; después `--gc-sections` descarta lo no usado dentro de ellos |
+| Reutilización | otro programa debe volver a compilar y listar los `.c` | otro programa puede enlazar `libutils.a` sin recompilar la librería |
+| Dependencia en runtime | ninguna | ninguna (el código se copia al binario) |
+| Actualización | se recompila y se reenlaza todo | se recompila el miembro, se rehace el archivo y se reenlaza la app |
+| Inspección | `nm` sobre cada `.o` | `ar t` para ver miembros y `nm` para ver símbolos |
+
+### Qué se gana y qué no
+
+Se gana:
+
+- **Modularidad:** la aplicación depende de una API (`mathlib.h`, `strutils.h`, `hal_*.h`), no de la lista de archivos internos de la librería.
+- **Reutilización:** la misma `libutils.a` puede enlazarse en otro ejecutable.
+- **Enlace selectivo:** el linker solo trae los miembros que hacen falta. Si un programa usa solo `math_gcd`, no necesita arrastrar `hal_uart.o`.
+- **Empaquetado:** se distribuye un solo archivo en lugar de muchos `.o`.
+
+Cosas a tener en cuenta:
+
+- **No es una biblioteca compartida:** no hay una sola copia en memoria ni carga dinámica. Cada ejecutable lleva su propia copia del código.
+- **Si cambia la librería, hay que reenlazar la aplicación.**
+- **El orden importa:** `-lutils` debe ir después de los objetos que usan sus símbolos. Si va antes, el linker no tiene referencias pendientes y no extrae nada.
+- **La granularidad es el objeto, no la función:** si se extrae un miembro, se trae completo; `-ffunction-sections` y `--gc-sections` pueden descartar después las funciones no usadas dentro de ese miembro.
+
+En este TP, `ar t build/libutils.a` muestra los cinco miembros (`mathlib.o`, `strutils.o`, `hal_uart.o`, `hal_ring.o` y `hal_timer.o`), y el ejecutable sigue produciendo exactamente la misma salida que antes del cambio.

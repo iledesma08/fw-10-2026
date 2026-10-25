@@ -16,17 +16,16 @@ TARGET_OPT= $(BUILD_DIR)/building_process_demo_opt
 STATIC_LIB= $(BUILD_DIR)/libutils.a
 
 SRCS  = src/app/main.c
-SRCS += src/lib/mathlib.c
-SRCS += src/lib/strutils.c
-SRCS += src/hal/hal_uart.c
-SRCS += src/hal/hal_ring.c
-SRCS += src/hal/hal_timer.c
-SRCS += src/demo/demo_embedded.c
 SRCS += src/demo/demo_math.c
 SRCS += src/demo/demo_str.c
+SRCS += src/demo/demo_embedded.c
 
-USE_STATIC_LIB = 0
-LIB_SRCS =
+USE_STATIC_LIB = 1
+LIB_SRCS  = src/lib/mathlib.c
+LIB_SRCS += src/lib/strutils.c
+LIB_SRCS += src/hal/hal_uart.c
+LIB_SRCS += src/hal/hal_ring.c
+LIB_SRCS += src/hal/hal_timer.c
 
 # Salida de consola: formato común + backend de la plataforma (src/platform/<PLATFORM>/)
 PLATFORM      = host
