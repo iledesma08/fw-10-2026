@@ -6,6 +6,7 @@
 #include "mathlib.h"
 #include "strutils.h"
 #include "hal_uart.h"
+#include "hal_ring.h"
 #include "print.h"
 
 int main(void)
@@ -15,6 +16,8 @@ int main(void)
     static const uint8_t payload[] = { 0x01U, 0x02U, 0x03U, 0x04U };
     static const uint8_t uart_msg[] = { 'O', 'K' };
     uart_regs_t uart;
+    ring_buf_t ring;
+    uint8_t byte;
     uint8_t crc;
 
     print_str("factorial(5) = ");
@@ -62,6 +65,15 @@ int main(void)
     print_hex((unsigned int)uart.SR, 8);
     print_str(" DR=0x");
     print_hex((unsigned int)uart.DR, 8);
+    print_str("\n");
+
+    ring_init(&ring);
+    for (uint8_t i = 0U; i < 10U; i++)
+        (void)ring_push(&ring, (uint8_t)('A' + i));
+
+    print_str("ring: ");
+    while (ring_pop(&ring, &byte) == 0)
+        print_chr((char)byte);
     print_str("\n");
 
     return 0;
