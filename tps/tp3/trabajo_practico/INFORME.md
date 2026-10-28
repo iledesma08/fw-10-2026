@@ -63,3 +63,161 @@ El total de `.bss` baja de 112 a 104 bytes al usar `O2`, pero los tamaños de `s
 
 En conclusión, yo creo que `data` no cambia porque el programa no tiene variables globales inicializadas propias que puedan cambiar de tamaño y reflejar la optimización; lo que pesa en esa columna son secciones fijas del ejecutable.
 
+## Hito 14 — Preguntas
+
+### 1. Tres símbolos de `mathlib.o` y su tipo según `nm`
+
+`nm` usa una letra para indicar el tipo:
+
+- `T` mayúscula es un símbolo definido en `.text` y global
+- `U` es *undefined*, o sea, el objeto usa el símbolo pero no lo define.
+- `t` minúscula sería local.
+
+Al hacer `nm build/lib/mathlib.o` aparece:
+
+```text
+0000000000000000 T math_factorial
+0000000000000000 T math_gcd
+0000000000000000 T math_is_prime
+0000000000000000 T math_isqrt
+```
+
+Todos estos son funciones globales definidas (por la `T`) en `.text`. Ninguno es `t` porque no son `static`.
+
+### 2. Símbolos que usa `demo_embedded.o` sin definirlos y dónde se resuelven
+
+Al correr `nm -u build/demo/demo_embedded.o` aparece:
+
+```text
+U print_chr
+U print_dec
+U print_hex
+U print_str
+U ring_init
+U ring_pop
+U ring_push
+U __stack_chk_fail
+U str_crc8
+U timer_get_ms
+U timer_init
+U timer_tick
+U uart_init
+U uart_send
+```
+
+Se resuelven así:
+
+| Símbolo | Se resuelve en |
+|---------|----------------|
+| `print_str`, `print_dec`, `print_hex` | `build/platform/print.o` |
+| `print_chr` | `build/platform/host/print_host.o` |
+| `ring_init`, `ring_push`, `ring_pop` | `hal_ring.o`, dentro de `build/libutils.a` |
+| `uart_init`, `uart_send` | `hal_uart.o`, dentro de `libutils.a` |
+| `timer_init`, `timer_tick`, `timer_get_ms` | `hal_timer.o`, dentro de `libutils.a` |
+| `str_crc8` | `strutils.o`, dentro de `libutils.a` |
+| `__stack_chk_fail` | libc (lo agrega el stack protector) |
+
+- Los `print_*` se enlazan directo porque `print.c` y `print_host.c` son objetos de plataforma, no forman parte de `libutils.a`.
+- Los `hal_*` y `str_crc8` salen de la biblioteca; el linker toma de ahí los objetos que necesita.
+- `__stack_chk_fail` no es nuestro: lo mete GCC por el stack protector y lo resuelve la libc (en el binario final queda como `U __stack_chk_fail@GLIBC_2.4`).
+
+#### Cómo comprobé la tabla
+
+`nm -u` solo me sirvio para ver qué símbolos usa `demo_embedded.o`, no para ver dónde están definidos. Para eso miré los objetos y la biblioteca.
+
+Primero, los `print_*`:
+
+```console
+$ nm --defined-only build/platform/print.o
+0000000000000000 T print_dec
+0000000000000000 T print_hex
+0000000000000000 T print_str
+
+$ nm --defined-only build/platform/host/print_host.o
+0000000000000000 T print_chr
+0000000000000000 T print_flush_buffer
+```
+
+Después, los objetos que hay dentro de `libutils.a`:
+
+```console
+$ ar t build/libutils.a
+mathlib.o
+strutils.o
+hal_uart.o
+hal_ring.o
+hal_timer.o
+```
+
+Y qué símbolos define cada uno:
+
+```console
+$ nm -A --defined-only build/libutils.a | grep -E ' T (ring_init|ring_push|ring_pop|uart_init|uart_send|timer_init|timer_tick|timer_get_ms|str_crc8)$'
+build/libutils.a:strutils.o:0000000000000000 T str_crc8
+build/libutils.a:hal_uart.o:0000000000000000 T uart_init
+build/libutils.a:hal_uart.o:0000000000000000 T uart_send
+build/libutils.a:hal_ring.o:0000000000000000 T ring_init
+build/libutils.a:hal_ring.o:0000000000000000 T ring_pop
+build/libutils.a:hal_ring.o:0000000000000000 T ring_push
+build/libutils.a:hal_timer.o:0000000000000000 T timer_get_ms
+build/libutils.a:hal_timer.o:0000000000000000 T timer_init
+build/libutils.a:hal_timer.o:0000000000000000 T timer_tick
+```
+
+Con esto se ve que:
+
+- `print_dec`, `print_hex` y `print_str` están en `print.o`; `print_chr` en `print_host.o`
+- `ring_*`, `uart_*`, `timer_*` y `str_crc8` salen de objetos de `libutils.a`.
+- `mathlib.o` también está en la biblioteca, pero `demo_embedded` no usa esas funciones.
+
+`__stack_chk_fail` es aparte: no lo define el TP. En el binario final queda así:
+
+```console
+$ nm build/building_process_demo | grep __stack_chk_fail
+U __stack_chk_fail@GLIBC_2.4
+```
+
+La `U` y el `@GLIBC_2.4` indican que lo resuelve la libc. Aparece porque GCC agrega la protección de stack (stack protector), no porque lo hayamos escrito nosotros. Esa protección guarda un valor testigo en la pila y, al volver de una función, comprueba que no haya cambiado. Si cambió, llama a `__stack_chk_fail`. En el TP no se hace nada con esa función: si el valor está bien, la llamada no se ejecuta; si no, la libc muestra un mensaje de “stack smashing detected” y aborta el programa.
+
+### 3. ¿Cuál es la sección más grande del ejecutable?
+
+En la tabla del hito 12 se ve que `text` es la columna más grande del resumen de `size`, pero `text` no es una sección: es una suma de varias. Si se mira sección por sección con:
+
+```console
+$ size -A build/building_process_demo
+```
+
+la más grande entre las que se cargan en memoria es `.text`:
+
+```text
+.text        4306
+.eh_frame    1132
+.dynamic      496
+.rodata       260
+```
+
+`.text` son 4306 bytes en el build normal (`-O0 -g`); en el optimizado (`-O2`) baja a 3188. Es el código de la app, la biblioteca y la plataforma.
+
+### 4. Después del hito 11, ¿en qué miembro de `libutils.a` está `math_factorial`?
+
+Ya sabemos que `libutils.a` agrupa varios `.o`, y uno de ellos es `mathlib.o`. Ese miembro sale de `src/lib/mathlib.c`, que está en `LIB_SRCS`; el Makefile lo compila a `build/lib/mathlib.o` y `ar` lo guarda dentro de la biblioteca.
+
+Se ve con:
+
+```console
+$ nm -A build/libutils.a | grep math_factorial
+build/libutils.a:mathlib.o:0000000000000000 T math_factorial
+```
+
+La salida de `nm -A` tiene el formato `archivo:miembro:símbolo`, así que `build/libutils.a:mathlib.o:...` significa que `math_factorial` está definido en `mathlib.o`, dentro de `libutils.a`.
+
+En total, el archivo tiene cinco miembros: `mathlib.o`, `strutils.o`, `hal_uart.o`, `hal_ring.o` y `hal_timer.o`.
+
+### 5. ¿Por qué la aplicación necesita `-lutils` para enlazar, pero `libutils.a` no necesita a la aplicación?
+
+La dependencia va para un solo lado. `-lutils` le dice al linker que busque en `libutils.a` los símbolos que quedaron sin resolver, y por eso va después de los `.o` de la app.
+
+- La app (`main.o`, `demo_*.o`) tiene referencias sin definir a `math_*`, `str_*`, `uart_*`, etc. Sin `-lutils`, el linker no sabe dónde están y falla con `undefined reference`.
+- `libutils.a` es una colección pasiva de objetos: no es un ejecutable, no tiene `main` y no referencia nada de la app. Si se corre `nm -u build/libutils.a`, lo único indefinido que aparece es `__stack_chk_fail` de libc, o sea, no hay ninguna referencia a `main` ni a `demo_*`.
+
+En resumen, la dependencia va en un solo sentido: la app necesita que `libutils.a` le resuelva símbolos, pero la biblioteca no necesita nada de la app. `libutils.a` se arma con `ar` a partir de sus propios `.o`, y el linker la consulta en el enlace final para completar lo que quedó indefinido.
