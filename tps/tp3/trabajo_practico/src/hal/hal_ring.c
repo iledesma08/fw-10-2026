@@ -1,8 +1,8 @@
 /**
  * @file    hal_ring.c
- * @brief   Buffer circular estático del TP3.
+ * @brief   Buffer circular estatico
  *
- * La capacidad la define RING_BUF_SIZE (32 en este TP) en hal_ring.h.
+ * La capacidad la define RING_BUF_SIZE (32 en este TP) en hal_ring.h
  */
 
 #include "hal_ring.h"

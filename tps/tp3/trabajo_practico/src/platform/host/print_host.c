@@ -1,3 +1,8 @@
+/**
+ * @file    print_host.c
+ * @brief   Backend de impresion para la plataforma host
+ */
+
 #include "print.h"
 #include <stdio.h>
 

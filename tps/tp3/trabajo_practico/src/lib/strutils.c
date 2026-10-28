@@ -1,8 +1,8 @@
 /**
  * @file    strutils.c
- * @brief   Buffer de strings de tamaño fijo del TP3.
+ * @brief   Buffer de strings de tamano fijo
  *
- * Sin memoria dinámica; todas las escrituras se acotan a STR_MAX_LEN.
+ * Sin memoria dinamica y todas las escrituras se acotan a STR_MAX_LEN
  */
 
 #include "strutils.h"
@@ -53,7 +53,7 @@ size_t strbuf_append_int(strbuf_t *buf, int32_t value) {
     magnitude = (uint32_t)value;
   }
 
-  /* Dígitos en orden inverso sobre un buffer temporal. */
+  /* Digitos en orden inverso sobre un buffer temporal */
   do {
     digits[n++] = (char)('0' + magnitude % 10);
     magnitude /= 10;
@@ -95,6 +95,7 @@ size_t str_trim(char *dst, const char *src, size_t max_len) {
   if (len > max_len - 1)
     len = max_len - 1;
 
+  /* Copia acotada al tamano de dst, como strncpy pero sin rellenar */
   for (size_t i = 0; i < len; i++)
     dst[i] = src[start + i];
   dst[len] = '\0';

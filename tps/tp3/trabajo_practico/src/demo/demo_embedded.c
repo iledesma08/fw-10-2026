@@ -1,9 +1,9 @@
 /**
  * @file    demo_embedded.c
- * @brief   Demo de los periféricos simulados e integración (hitos 6 a 9).
+ * @brief   Demo de los perifericos simulados e integracion (hitos 6 a 9)
  *
  * UART + ring buffer + trama con CRC-8 + timer. Toda la salida se hace con
- * print.h (print_str / print_dec / print_hex / print_chr).
+ * print.h (print_str / print_dec / print_hex / print_chr)
  */
 
 #include <stddef.h>
@@ -52,7 +52,7 @@ void demo_embedded(void) {
     print_chr((char)byte);
   print_str("\n");
 
-  /* Hito 9: trama por el ring, con validación de CRC ─────── */
+  /* Hito 9: trama por el ring, con validacion de CRC ------- */
   frame[0] = 0xAAU;
   for (size_t i = 0; i < sizeof(payload); i++)
     frame[1U + i] = payload[i];

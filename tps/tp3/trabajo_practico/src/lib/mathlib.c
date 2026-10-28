@@ -1,6 +1,6 @@
 /**
  * @file    mathlib.c
- * @brief   Biblioteca matemática entera del TP3.
+ * @brief   Biblioteca matematica entera del TP3
  */
 
 #include "mathlib.h"
@@ -39,7 +39,7 @@ uint32_t math_isqrt(uint32_t n) {
   if (n == 0)
     return 0;
 
-  /* Método de Newton para la raíz cuadrada entera. */
+  /* Metodo de Newton para la raiz cuadrada entera */
   x = n;
   y = (x + 1) / 2;
   while (y < x) {

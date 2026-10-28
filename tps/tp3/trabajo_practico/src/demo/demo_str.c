@@ -1,8 +1,8 @@
 /**
  * @file    demo_str.c
- * @brief   Demo del subsistema strutils (hitos 4 y 5).
+ * @brief   Demo del subsistema strutils (hitos 4 y 5)
  *
- * Sin printf: se usa el string builder y print.h.
+ * Sin printf: se usa el string builder y print.h
  */
 
 #include "demo.h"

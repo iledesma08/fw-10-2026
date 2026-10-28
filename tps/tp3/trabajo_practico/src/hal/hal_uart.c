@@ -1,9 +1,9 @@
 /**
  * @file    hal_uart.c
- * @brief   Driver de la UART simulada del TP3.
+ * @brief   Driver de la UART simulada
  *
- * El periférico es una estructura de registros en memoria; no hay hardware
- * real. El reloj del periférico es UART_PERIPH_CLK_HZ (16 MHz en este TP).
+ * El periferico es una estructura de registros en memoria. No hay hardware
+ * real, el reloj del periferico es UART_PERIPH_CLK_HZ (16 MHz en este TP)
  */
 
 #include "hal_uart.h"

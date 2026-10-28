@@ -1,6 +1,6 @@
 /**
  * @file    demo_math.c
- * @brief   Demo del subsistema mathlib (hitos 2 y 3).
+ * @brief   Demo del subsistema mathlib (hitos 2 y 3)
  */
 
 #include "demo.h"

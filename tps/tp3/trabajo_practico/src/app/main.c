@@ -1,9 +1,8 @@
 /**
  * @file    main.c
- * @brief   Punto de entrada del TP3.
  *
  * Solo orquesta las tres demos. Si recibe --version imprime nombre y
- * versión y termina sin correr nada más (hito 13).
+ * version y termina sin correr nada mas (hito 13)
  */
 
 #include <string.h>

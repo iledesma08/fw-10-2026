@@ -1,8 +1,6 @@
 /**
  * @file    hal_timer.c
- * @brief   Temporizador software del TP3 (1 tick = 1 ms).
- *
- * No existe en las actividades de clase: la implementación sale del header.
+ * @brief   Implementacion del temporizador software del TP3
  */
 
 #include "hal_timer.h"

@@ -1,3 +1,8 @@
+/**
+ * @file    print.c
+ * @brief   Formato de salida de consola sobre print_chr()
+ */
+
 #include "print.h"
 
 void print_str(const char *p) {
