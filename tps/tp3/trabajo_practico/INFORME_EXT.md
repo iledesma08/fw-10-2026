@@ -196,13 +196,13 @@ La versión normal se compila con `make`, que usa `CFLAGS` con `-O0` y `-g`. La 
 
 | Ejecutable | Optimización | `text` | `data` | `bss` | `dec` |
 |------------|--------------|-------:|-------:|------:|------:|
-| `building_process_demo` | `-O0` | 6894 | 600 | 112 | 7606 |
-| `building_process_demo_opt` | `-O2` | 5457 | 600 | 104 | 6161 |
-| Diferencia | | -1437 (-20,8 %) | 0 | -8 (-7,1 %) | -1445 (-19,0 %) |
+| `building_process_demo` | `-O0` | 7200 | 616 | 112 | 7928 |
+| `building_process_demo_opt` | `-O2` | 5903 | 616 | 104 | 6623 |
+| Diferencia | | -1297 (-18,0 %) | 0 | -8 (-7,1 %) | -1305 (-16,5 %) |
 
 ### Por qué cambia `text`
 
-`text` baja 1437 bytes. La única diferencia entre los dos binarios son las flags (`-O0 -g` contra `-O2 -DNDEBUG`): `-g` no cambia el código y `-DNDEBUG` no tiene efecto porque no hay `assert`, así que la baja se explica por las optimizaciones que agrega `-O2`.
+`text` baja 1297 bytes. La única diferencia entre los dos binarios son las flags (`-O0 -g` contra `-O2 -DNDEBUG`): `-g` no cambia el código y `-DNDEBUG` no tiene efecto porque no hay `assert`, así que la baja se explica por las optimizaciones que agrega `-O2`.
 
 Para confirmar qué optimizaciones inciden, compilé con las mismas flags de `make opt` y usé estos reportes:
 
@@ -221,7 +221,7 @@ Para confirmar qué optimizaciones inciden, compilé con las mismas flags de `ma
   src/hal/hal_uart.c:14:15: optimized:  Inlining bit_set/0 into uart_init/1.
   src/hal/hal_uart.c:24:14: optimized:  Inlining bit_set/0 into uart_send_byte/2.
   src/hal/hal_uart.c:29:5: optimized:  Inlining uart_send_byte/2 into uart_send/3.
-  src/lib/strutils.c:70:10: optimized:  Inlined strbuf_append/7 into strbuf_append_int/3 which now has time 243.072975 and size 40, net change of +9.
+  src/lib/strutils.c:71:10: optimized:  Inlined strbuf_append/10 into strbuf_append_int/5 which now has time 243.072975 and size 40, net change of +9.
   ```
 
 - y con `-fopt-info-optimized` GCC reporta, por ejemplo, que desenrolla y vectoriza un bucle de `demo_embedded`:
@@ -244,7 +244,7 @@ nm -S --size-sort build/building_process_demo_opt | grep -E ' (t|T) '
 | Función | `-O0` (bytes) | `-O2` (bytes) |
 |---------|--------------:|--------------:|
 | `demo_embedded` | 792 | 594 |
-| `str_trim` | 395 | 215 |
+| `str_trim` | 335 | 240 |
 | `demo_str` | 301 | 248 |
 | `demo_math` | 251 | 203 |
 | `ring_pop` | 120 | 54 |
@@ -270,11 +270,11 @@ size -A build/building_process_demo_opt | grep -E '^\.(dynamic|got|data|init_arr
 | `.init_array` | 8 | 8 |
 | `.fini_array` | 8 | 8 |
 | `.dynamic` | 496 | 496 |
-| `.got` | 80 | 80 |
+| `.got` | 96 | 96 |
 | `.data` | 8 | 8 |
-| Total de la columna `data` | 600 | 600 |
+| Total de la columna `data` | 616 | 616 |
 
-La columna `data` de `size` no es la sección `.data`: agrupa las secciones inicializadas y escribibles. En este binario son las cinco de la tabla y suman 600 bytes. Al comparar los dos binarios, las cinco secciones miden lo mismo, así que el total de la columna también queda igual.
+La columna `data` de `size` no es la sección `.data`: agrupa las secciones inicializadas y escribibles. En este binario son las cinco de la tabla y suman 616 bytes. Al comparar los dos binarios, las cinco secciones miden lo mismo, así que el total de la columna también queda igual.
 
 `data` y `bss` son las dos zonas de variables globales:
 
@@ -311,7 +311,7 @@ El total de `.bss` baja de 112 a 104 bytes. En `-O0`, los símbolos de `.bss` qu
 
 En conclusión, `data` no cambia porque el programa no tiene variables globales inicializadas propias que puedan cambiar de tamaño y reflejar la optimización; lo que pesa en esa columna son secciones fijas del ejecutable. La baja de `bss` viene del acomodo del linker, no de que las demos usen menos RAM.
 
-> En resumen: `-O2` reduce el código un 20,8 % y el total un 19,0 %, mientras que `data` y `bss` quedan prácticamente iguales porque el programa tiene pocas variables globales. En un firmware embebido esa diferencia se traduce directamente en menos flash ocupada y la RAM no cambia de forma apreciable.
+> En resumen: `-O2` reduce el código un 18,0 % y el total un 16,5 %, mientras que `data` y `bss` quedan prácticamente iguales porque el programa tiene pocas variables globales. En un firmware embebido esa diferencia se traduce directamente en menos flash ocupada y la RAM no cambia de forma apreciable.
 
 ## Hito 14 — Preguntas
 
@@ -495,6 +495,6 @@ El archivo tiene un miembro por cada `.c` de `LIB_SRCS`: `mathlib.o`, `strutils.
 La dependencia va para un solo lado. La base está en el hito 11: `-lutils` le dice al linker que busque en `libutils.a` los símbolos que quedaron sin resolver, y por eso va después de los `.o` de la app.
 
 - La app (`main.o`, `demo_*.o`) tiene referencias sin definir a `math_*`, `str_*`, `uart_*`, etc. Sin `-lutils`, el linker no sabe dónde están y falla con `undefined reference`.
-- `libutils.a` es una colección pasiva de objetos: no es un ejecutable, no tiene `main` y no referencia nada de la app. Si se corre `nm -u build/libutils.a`, lo único indefinido que aparece es `__stack_chk_fail` de libc; no hay ninguna referencia a `main` ni a `demo_*`.
+- `libutils.a` es una colección pasiva de objetos: no es un ejecutable, no tiene `main` y no referencia nada de la app. Si se corre `nm -u build/libutils.a`, los únicos símbolos indefinidos son `__stack_chk_fail` y `__ctype_b_loc`, ambos de libc; no hay ninguna referencia a `main` ni a `demo_*`. `__ctype_b_loc` aparece porque `str_trim` usa `isspace`.
 
 > En resumen, la dependencia va en un solo sentido: la app necesita que `libutils.a` le resuelva símbolos, pero la biblioteca no necesita nada de la app. `libutils.a` se arma con `ar` a partir de sus propios `.o`, y el linker la consulta en el enlace final para completar lo que quedó indefinido.

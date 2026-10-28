@@ -6,11 +6,11 @@ La versión normal se compila con `make` (`CFLAGS` con `-O0` y `-g`) y la optimi
 
 | Ejecutable | Optimización | `text` | `data` | `bss` | `dec` |
 |------------|--------------|-------:|-------:|------:|------:|
-| `building_process_demo` | `-O0` | 6894 | 600 | 112 | 7606 |
-| `building_process_demo_opt` | `-O2` | 5457 | 600 | 104 | 6161 |
-| Diferencia | | -1437 (-20,8 %) | 0 | -8 (-7,1 %) | -1445 (-19,0 %) |
+| `building_process_demo` | `-O0` | 7200 | 616 | 112 | 7928 |
+| `building_process_demo_opt` | `-O2` | 5903 | 616 | 104 | 6623 |
+| Diferencia | | -1297 (-18,0 %) | 0 | -8 (-7,1 %) | -1305 (-16,5 %) |
 
-`text` baja 1437 bytes. La única diferencia entre los dos binarios son las flags (`-O0 -g` contra `-O2 -DNDEBUG`), así que la baja se explica por las optimizaciones que agrega `-O2`. Para confirmar qué optimizaciones inciden, compilé con las mismas flags de `make opt` y usé estos reportes:
+`text` baja 1297 bytes. La única diferencia entre los dos binarios son las flags (`-O0 -g` contra `-O2 -DNDEBUG`), así que la baja se explica por las optimizaciones que agrega `-O2`. Para confirmar qué optimizaciones inciden, compilé con las mismas flags de `make opt` y usé estos reportes:
 
 - con `-fopt-info-inline` se confirma el inlining:
 
@@ -27,7 +27,7 @@ La versión normal se compila con `make` (`CFLAGS` con `-O0` y `-g`) y la optimi
   src/hal/hal_uart.c:14:15: optimized:  Inlining bit_set/0 into uart_init/1.
   src/hal/hal_uart.c:24:14: optimized:  Inlining bit_set/0 into uart_send_byte/2.
   src/hal/hal_uart.c:29:5: optimized:  Inlining uart_send_byte/2 into uart_send/3.
-  src/lib/strutils.c:70:10: optimized:  Inlined strbuf_append/7 into strbuf_append_int/3 which now has time 243.072975 and size 40, net change of +9.
+  src/lib/strutils.c:71:10: optimized:  Inlined strbuf_append/10 into strbuf_append_int/5 which now has time 243.072975 and size 40, net change of +9.
   ```
 
 - y con `-fopt-info-optimized` GCC reporta, por ejemplo, que desenrolla y vectoriza un bucle de `demo_embedded`:
@@ -45,7 +45,7 @@ Por otro lado, con `nm -S --size-sort` obtengo los tamaños por función:
 | Función | `-O0` (bytes) | `-O2` (bytes) |
 |---------|--------------:|--------------:|
 | `demo_embedded` | 792 | 594 |
-| `str_trim` | 395 | 215 |
+| `str_trim` | 335 | 240 |
 | `demo_str` | 301 | 248 |
 | `demo_math` | 251 | 203 |
 | `ring_pop` | 120 | 54 |
@@ -57,7 +57,7 @@ Por otro lado, con `nm -S --size-sort` obtengo los tamaños por función:
 
 También me llamó la atención que `data` diera igual en los dos casos. Para investigarlo, miré las secciones con `size -A` y vi que la columna `data` de `size` es la suma de varias secciones: `.dynamic`, `.got`, `.data`, `.init_array` y `.fini_array`. Al comparar los dos binarios, esas cinco secciones miden lo mismo, así que el total de la columna también queda igual.
 
-Como esa columna no es solo `.data`, quise ver dónde estaban nuestras variables globales. `size` separa las globales en dos lugares: las inicializadas van a `.data` y las que arrancan en cero a `.bss`; por eso también miré `.bss`. Con `nm -S --size-sort` se ven los símbolos y sus tamaños: los que `nm` marca con `b` o `B` son los que van a `.bss`, y los que marca con `d` o `D` los que van a `.data`. Filtrando `b`/`B` aparecen `sim_uart` (20 bytes), `sim_ring` (38) y `timer_ms` (4), y no aparece ninguna global de tipo `d`/`D`. Eso muestra que nuestras variables globales están en `.bss`, no en `.data`.
+Como esa columna no es solo `.data`, quise ver dónde estaban nuestras variables globales. `size` separa las globales en dos lugares: las inicializadas van a `.data` y las que arrancan en cero a `.bss`; por eso también miré `.bss`. Con `nm -S --size-sort` se ven los símbolos y sus tamaños: los que `nm` marca con `b` o `B` son los que van a `.bss`, y los que marca con `d` o `D` los que van a `.data`. Filtrando `b`/`B` aparecen `completed.0` (1 byte, del código de arranque), `sim_uart` (20 bytes), `sim_ring` (38) y `timer_ms` (4), y no aparece ninguna global de tipo `d`/`D`. Eso muestra que nuestras variables globales están en `.bss`, no en `.data`.
 
 El total de `.bss` baja de 112 a 104 bytes al usar `O2`, pero los tamaños de `sim_uart`, `sim_ring` y `timer_ms` son los mismos en ambos binarios. Si nuestras variables no se achican y el total sí baja, la baja no viene de ellas: viene de cómo el linker acomoda el resto de `.bss`, no de que las demos usen menos RAM por ejemplo.
 
@@ -73,16 +73,15 @@ En conclusión, yo creo que `data` no cambia porque el programa no tiene variabl
 - `U` es *undefined*, o sea, el objeto usa el símbolo pero no lo define.
 - `t` minúscula sería local.
 
-Al hacer `nm build/lib/mathlib.o` aparece:
+Al hacer `nm build/lib/mathlib.o` aparecen, por ejemplo, estos tres:
 
 ```text
 0000000000000000 T math_factorial
 0000000000000000 T math_gcd
-0000000000000000 T math_is_prime
 0000000000000000 T math_isqrt
 ```
 
-Todos estos son funciones globales definidas (por la `T`) en `.text`. Ninguno es `t` porque no son `static`.
+Los tres son funciones globales definidas (por la `T`) en `.text`. Ninguno es `t` porque no son `static`.
 
 ### 2. Símbolos que usa `demo_embedded.o` sin definirlos y dónde se resuelven
 
@@ -218,6 +217,6 @@ En total, el archivo tiene cinco miembros: `mathlib.o`, `strutils.o`, `hal_uart.
 La dependencia va para un solo lado. `-lutils` le dice al linker que busque en `libutils.a` los símbolos que quedaron sin resolver, y por eso va después de los `.o` de la app.
 
 - La app (`main.o`, `demo_*.o`) tiene referencias sin definir a `math_*`, `str_*`, `uart_*`, etc. Sin `-lutils`, el linker no sabe dónde están y falla con `undefined reference`.
-- `libutils.a` es una colección pasiva de objetos: no es un ejecutable, no tiene `main` y no referencia nada de la app. Si se corre `nm -u build/libutils.a`, lo único indefinido que aparece es `__stack_chk_fail` de libc, o sea, no hay ninguna referencia a `main` ni a `demo_*`.
+- `libutils.a` es una colección pasiva de objetos: no es un ejecutable, no tiene `main` y no referencia nada de la app. Si se corre `nm -u build/libutils.a`, los únicos símbolos indefinidos son `__stack_chk_fail` y `__ctype_b_loc`, ambos de libc; no hay ninguna referencia a `main` ni a `demo_*`. `__ctype_b_loc` aparece porque `str_trim` usa `isspace`.
 
 En resumen, la dependencia va en un solo sentido: la app necesita que `libutils.a` le resuelva símbolos, pero la biblioteca no necesita nada de la app. `libutils.a` se arma con `ar` a partir de sus propios `.o`, y el linker la consulta en el enlace final para completar lo que quedó indefinido.
