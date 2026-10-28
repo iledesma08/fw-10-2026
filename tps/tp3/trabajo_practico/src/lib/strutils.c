@@ -6,6 +6,7 @@
  */
 
 #include "strutils.h"
+#include <ctype.h>
 
 void strbuf_init(strbuf_t *buf) {
   buf->data[0] = '\0';
@@ -80,16 +81,14 @@ size_t str_trim(char *dst, const char *src, size_t max_len) {
   if (max_len == 0)
     return 0;
 
-  while (src[start] != '\0' && (src[start] == ' ' || src[start] == '\t' ||
-                                src[start] == '\n' || src[start] == '\r'))
+  while (src[start] != '\0' && isspace((unsigned char)src[start]))
     start++;
 
   end = start;
   while (src[end] != '\0')
     end++;
 
-  while (end > start && (src[end - 1] == ' ' || src[end - 1] == '\t' ||
-                         src[end - 1] == '\n' || src[end - 1] == '\r'))
+  while (end > start && isspace((unsigned char)src[end - 1]))
     end--;
 
   len = end - start;
