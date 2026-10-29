@@ -1,9 +1,6 @@
 /**
  * @file    hal_uart.h
  * @brief   Driver de una UART simulada con registros en memoria
- *
- * No hay hardware real: el estado vive en un uart_regs_t que provee el
- * llamador, asi que pueden coexistir varias instancias
  */
 
 #ifndef HAL_UART_H
@@ -17,19 +14,21 @@
 
 /** @brief Registros de la UART simulada */
 typedef struct {
-  volatile uint32_t CR1; /**< Control 1: UE, TE y RE */
-  volatile uint32_t CR2; /**< Control 2: reservado en esta simulacion (no se usa
-                            pero venia asi del commit inicial) */
-  volatile uint32_t SR;  /**< Estado: bit TC, entre otros */
-  volatile uint32_t DR;  /**< Dato: ultimo byte transmitido */
-  volatile uint32_t BRR; /**< Baud rate: reloj / baudrate */
+  volatile uint32_t CR1; /**< Control Register 1: UE, TE y RE */
+  volatile uint32_t CR2; /**< Control Register 2: reservado en esta simulacion
+                            (no se usa pero venia asi del commit inicial) */
+  volatile uint32_t SR;  /**< State Register: bit TC, entre otros */
+  volatile uint32_t DR;  /**< Data Register: ultimo byte transmitido */
+  volatile uint32_t BRR; /**< Baud Rate Register */
 } uart_regs_t;
 
 /**
  * @brief Inicializa una instancia de UART
  *
  * Calcula BRR = UART_PERIPH_CLK_HZ / baudrate, prende UE, TE y RE en
- * CR1 y limpia SR y DR, y @p baudrate debe ser distinto de cero
+ * CR1 y limpia SR y DR
+ *
+ * @p baudrate debe ser distinto de cero
  *
  * @param uart     Registros a inicializar
  * @param baudrate Velocidad en baudios

@@ -52,7 +52,7 @@ void demo_embedded(void) {
     print_chr((char)byte);
   print_str("\n");
 
-  /* Hito 9: trama por el ring, con validacion de CRC ------- */
+  /* Hito 9: trama por el ring, con validacion de CRC */
   frame[0] = 0xAAU;
   for (size_t i = 0; i < sizeof(payload); i++)
     frame[1U + i] = payload[i];

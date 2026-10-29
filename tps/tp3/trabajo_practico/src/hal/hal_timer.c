@@ -1,6 +1,6 @@
 /**
  * @file    hal_timer.c
- * @brief   Implementacion del temporizador software del TP3
+ * @brief   Implementacion del temporizador
  */
 
 #include "hal_timer.h"

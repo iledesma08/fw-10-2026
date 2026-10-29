@@ -11,7 +11,7 @@
 void uart_init(uart_regs_t *uart, uint32_t baudrate) {
   uart->BRR = UART_PERIPH_CLK_HZ / baudrate;
 
-  uart->CR1 = bit_set(0U, 13);       /* UE: USART enable */
+  uart->CR1 = bit_set(0U, 13);       /* UE: UART enable */
   uart->CR1 = bit_set(uart->CR1, 3); /* TE: transmitter enable */
   uart->CR1 = bit_set(uart->CR1, 2); /* RE: receiver enable */
 
