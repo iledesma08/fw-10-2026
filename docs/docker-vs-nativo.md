@@ -18,7 +18,7 @@ Imagen publicada: `ghcr.io/iledesma08/fw-env:latest` (`linux/amd64`, 1.25 GB).
 | Toolchain RISC-V | Se compila de fuentes (`./configure --prefix=/opt/riscv --enable-multilib` + `make -jX`) | Precompilado de Ubuntu (`gcc-riscv64-unknown-elf`), con symlinks de compatibilidad en `/opt/riscv/bin`. Soporta `rv32i/ilp32` igual que el compilado |
 | WSL | Requiere `.wslconfig` afinado (RAM/swap/CPU) o la compilación cuelga la máquina | Solo Docker Desktop; la compilación pesada no existe |
 | `make build_project_config` | Corre en el host | Idem, adentro del container (genera `fw/config.h`, `rtl/config.vh`, `rtl/register_file.v`) |
-| `make -C fw` | Usa `/opt/riscv/bin/...` fijo | `fw/Makefile` detecta `/opt/riscv` si existe y si no usa el del `PATH`: anda en ambos mundos |
+| `make -C fw` | Usa `/opt/riscv/bin/...` (o el del `PATH` si está) | `fw/Makefile` usa el cross-compiler del `PATH` (apt) y si no está cae a `/opt/riscv/bin` (setup compilado): anda en ambos mundos |
 | `make sim` | Verilator del host | Verilator 5.020 del container (requirió el fix de 1 línea en `rtl/adc.sv`, compatible con Verilator 4 también) |
 | `make wave` (gtkwave GUI) | Abre el viewer automáticamente | El `.vcd` se genera en el container y **se abre con gtkwave en el host** (única diferencia real del flujo, ver abajo) |
 | Limpieza (`make clean`) | `rm` acotado a `obj_dir`, `*.vcd`, `*.elf/bin/hex` | Idem, sobre los archivos montados |
