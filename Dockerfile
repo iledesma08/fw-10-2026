@@ -19,7 +19,7 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    make git python3 \
+    make git python3 nano \
     g++ \
     verilator gtkwave \
     bsdextrautils \
