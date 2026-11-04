@@ -457,14 +457,19 @@ En el hito 12 ya vimos que `text` es la columna más grande del resumen de `size
 size -A build/building_process_demo
 ```
 
-la más grande entre las que se cargan en memoria es `.text`:
+la sección más grande del archivo normal analizado es `.debug_info` (6215 bytes), que contiene información de depuración:
 
 ```text
+.debug_info  6215
 .text        4306
 .eh_frame    1132
 .dynamic      496
 .rodata       260
 ```
+
+Si consideramos únicamente las secciones asignadas a memoria durante la ejecución, la mayor es `.text` (4306 bytes). `.debug_info` no pertenece a ese grupo: con `readelf -SW build/building_process_demo` se observa que no tiene la bandera `A` (`SHF_ALLOC`), mientras que `.text` sí la tiene. Por eso hay que explicitar el criterio: la mayor sección del archivo no es necesariamente la mayor entre las asignadas a memoria.
+
+Tampoco hay que confundir `.text` con la columna `text` de `size`: en el normal, esa columna vale 7200 bytes porque agrupa varias secciones, no solo `.text`.
 
 `.text` son 4306 bytes en el build normal (`-O0 -g`); en el optimizado (`-O2`) baja a 3188. Es el código de la app, la biblioteca y la plataforma.
 
