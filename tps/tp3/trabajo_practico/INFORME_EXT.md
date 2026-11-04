@@ -204,16 +204,12 @@ La versión normal se compila con `make`, que usa `CFLAGS` con `-O0` y `-g`. La 
 
 `text` baja 1297 bytes. La única diferencia entre los dos binarios son las flags (`-O0 -g` contra `-O2 -DNDEBUG`): `-g` no cambia el código y `-DNDEBUG` no tiene efecto porque no hay `assert`, así que la baja se explica por las optimizaciones que agrega `-O2`.
 
-Para confirmar qué optimizaciones inciden, compilé con las mismas flags de `make opt` y usé estos reportes:
+Para confirmar qué optimizaciones inciden, agregué al Makefile dos targets que compilan con las mismas flags de `make opt` (`OPT_FLAGS`) y escriben los objetos en `/tmp/tp3-reports`. El objetivo no es auditar todos los archivos: mostramos algunas optimizaciones en casos representativos (por ejemplo, inlining y vectorización); se puede ejecutar sobre todos los fuentes, pero para explicar por qué baja `text` alcanza con estos ejemplos:
 
-- con `-fopt-info-inline` se confirma el inlining:
+- con `make report-inline`, que pasa `-fopt-info-inline`, se confirma el inlining:
 
   ```console
-  $ for f in src/hal/hal_ring.c src/hal/hal_uart.c src/lib/strutils.c; do
-      gcc -std=c11 -O2 -DNDEBUG -ffunction-sections -fdata-sections \
-        -Isrc/lib -Isrc/hal -Isrc/demo -Isrc/app -Isrc/platform \
-        -fopt-info-inline -c "$f" -o "/tmp/opencode/$(basename "$f" .c).o"
-    done
+  $ make report-inline
   src/hal/hal_ring.c:20:7: optimized:  Inlining ring_is_full/1 into ring_push/3.
   src/hal/hal_ring.c:31:7: optimized:  Inlining ring_is_empty/0 into ring_pop/4.
   src/hal/hal_uart.c:16:15: optimized:  Inlining bit_set/0 into uart_init/1.
@@ -224,15 +220,15 @@ Para confirmar qué optimizaciones inciden, compilé con las mismas flags de `ma
   src/lib/strutils.c:71:10: optimized:  Inlined strbuf_append/10 into strbuf_append_int/5 which now has time 243.072975 and size 40, net change of +9.
   ```
 
-- y con `-fopt-info-optimized` GCC reporta, por ejemplo, que desenrolla y vectoriza un bucle de `demo_embedded`:
+- y con `make report-optimized`, que pasa `-fopt-info-optimized`, GCC reporta, por ejemplo, que desenrolla y vectoriza un bucle de `demo_embedded`:
 
   ```console
-  $ gcc -std=c11 -O2 -DNDEBUG -ffunction-sections -fdata-sections \
-      -Isrc/lib -Isrc/hal -Isrc/demo -Isrc/app -Isrc/platform \
-      -fopt-info-optimized -c src/demo/demo_embedded.c -o /tmp/opencode/demo_embedded.o
+  $ make report-optimized
   src/demo/demo_embedded.c:57:24: optimized: loop with 4 iterations completely unrolled (header execution count 97603128)
   src/demo/demo_embedded.c:56:12: optimized: basic block part vectorized using 16 byte vectors
   ```
+
+Los targets usan `REPORT_DIR = /tmp/tp3-reports` por defecto. Sus listas de archivos se pueden ajustar con `REPORT_INLINE_SRCS` y `REPORT_OPTIMIZED_SRCS` sin repetir los comandos de `gcc`.
 
 El efecto también se ve en los tamaños por función. Con `nm -S --size-sort`:
 

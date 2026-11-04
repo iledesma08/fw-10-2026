@@ -37,7 +37,12 @@ OBJS          = $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SRCS))
 APP_OBJS      = $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(APP_SRCS))
 PLATFORM_OBJS = $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(PLATFORM_SRCS))
 
-.PHONY: all opt clean verify
+# Reportes de optimización del hito 12: compilan a /tmp y no tocan build/.
+REPORT_DIR            ?= /tmp/tp3-reports
+REPORT_INLINE_SRCS    ?= src/hal/hal_ring.c src/hal/hal_uart.c src/lib/strutils.c
+REPORT_OPTIMIZED_SRCS ?= src/demo/demo_embedded.c
+
+.PHONY: all opt clean verify report-inline report-optimized
 
 all: $(TARGET)
 
@@ -45,6 +50,20 @@ opt: $(TARGET_OPT)
 
 verify:
 	@bash verify_lab.sh
+
+report-inline:
+	@set -e; mkdir -p $(REPORT_DIR); \
+	for f in $(REPORT_INLINE_SRCS); do \
+		$(CC) $(OPT_FLAGS) $(INCLUDES) -fopt-info-inline \
+			-c $$f -o "$(REPORT_DIR)/$$(basename $$f .c).o"; \
+	done
+
+report-optimized:
+	@set -e; mkdir -p $(REPORT_DIR); \
+	for f in $(REPORT_OPTIMIZED_SRCS); do \
+		$(CC) $(OPT_FLAGS) $(INCLUDES) -fopt-info-optimized \
+			-c $$f -o "$(REPORT_DIR)/$$(basename $$f .c).o"; \
+	done
 
 $(BUILD_DIR):
 	@mkdir -p $@
