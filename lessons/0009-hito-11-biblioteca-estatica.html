@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hito 11: biblioteca estática y Makefile</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+</head>
+<body>
+<main>
+  <p class="kicker">Preparación TP3 · Lección 0009</p>
+  <h1>Hito 11: biblioteca estática</h1>
+  <p class="lead">Al terminar vas a poder seguir una función desde su archivo C hasta un miembro de <code>libutils.a</code>, y explicar cómo el linker encuentra esa definición cuando construye la aplicación.</p>
+
+  <section id="utilidad">
+    <h2>1. Reunir utilidades sin meter la aplicación en ellas</h2>
+    <p>Las funciones matemáticas, los strings y los drivers forman un conjunto reutilizable. En lugar de pasar sus cinco objetos uno por uno al linkear cada programa, el hito 11 los agrupa en una <strong>biblioteca estática</strong>.</p>
+    <p><code>libutils.a</code> es un <strong>archivo contenedor</strong> de archivos objeto. Cada objeto guardado se llama <strong>miembro</strong>. No es un ejecutable ni una carpeta; no corre por sí solo y no necesita tener <code>main</code>.</p>
+    <pre><code>mathlib.c → mathlib.o ─┐
+strutils.c → strutils.o│
+hal_uart.c → hal_uart.o├→ libutils.a
+hal_ring.c → hal_ring.o│
+hal_timer.c → hal_timer.o┘
+
+app + demos + plataforma + biblioteca → ejecutable</code></pre>
+    <p>Separar módulos no significa que deban ser totalmente independientes del sistema. Un miembro de la biblioteca puede usar funciones externas y dejar referencias <code>U</code> para el enlace final.</p>
+  </section>
+
+  <section id="listas">
+    <h2>2. Qué fuentes van a cada lado</h2>
+    <table>
+      <caption>Reparto real del Makefile final</caption>
+      <thead><tr><th>Variable</th><th>Contenido y función</th></tr></thead>
+      <tbody>
+        <tr><td><code>SRCS</code></td><td><code>main.c</code> y las tres demos. Son los consumidores de las utilidades.</td></tr>
+        <tr><td><code>LIB_SRCS</code></td><td><code>mathlib.c</code>, <code>strutils.c</code>, <code>hal_uart.c</code>, <code>hal_ring.c</code> y <code>hal_timer.c</code>. Sus objetos se archivan.</td></tr>
+        <tr><td><code>PLATFORM_SRCS</code></td><td><code>src/platform/print.c</code> y los fuentes del backend seleccionado, aquí <code>host</code>. Se linkean directamente, fuera del archive.</td></tr>
+      </tbody>
+    </table>
+    <pre><code>USE_STATIC_LIB = 1
+STATIC_LIB = $(BUILD_DIR)/libutils.a
+APP_SRCS = $(filter src/app/% src/demo/%,$(SRCS))
+LIB_OBJS = $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(LIB_SRCS))</code></pre>
+    <p><code>$(VARIABLE)</code> pide a Make expandir su contenido. <code>filter</code> conserva las rutas que coinciden con los patrones indicados. En esas funciones, <code>%</code> representa la parte variable del nombre. <code>patsubst</code> sustituye un patrón por otro:</p>
+    <pre><code>src/lib/mathlib.c → build/lib/mathlib.o
+src/hal/hal_timer.c → build/hal/hal_timer.o</code></pre>
+    <p><code>$(wildcard src/platform/$(PLATFORM)/*.c)</code> enumera los archivos que coinciden con esa ruta. Con <code>PLATFORM = host</code>, incorpora <code>print_host.c</code>. El propósito es elegir el backend de salida, no moverlo a la biblioteca de utilidades.</p>
+  </section>
+
+  <section id="reglas">
+    <h2>3. Una regla patrón, expandida con un ejemplo</h2>
+    <pre><code>$(BUILD_DIR)/%.o: src/%.c | $(BUILD_DIR)
+    @mkdir -p $(dir $@)
+    $(CC) $(CFLAGS) $(INCLUDES) -c $&lt; -o $@</code></pre>
+    <p>El objetivo es un archivo <code>.o</code>; el requisito normal es su fuente <code>.c</code>. Para construir <code>build/lib/mathlib.o</code>, el patrón vincula ese objetivo con <code>src/lib/mathlib.c</code>. Las recetas del Makefile real comienzan con tabulación; el bloque solo ilustra su lectura.</p>
+    <table>
+      <caption>Variables automáticas en el contexto de una receta</caption>
+      <thead><tr><th>Expresión</th><th>Qué vale</th></tr></thead>
+      <tbody>
+        <tr><td><code>$@</code></td><td>El objetivo: aquí <code>build/lib/mathlib.o</code>.</td></tr>
+        <tr><td><code>$&lt;</code></td><td>El primer requisito: aquí <code>src/lib/mathlib.c</code>.</td></tr>
+        <tr><td><code>$^</code></td><td>Los requisitos normales, sin duplicados. En la receta del archive serán sus cinco objetos.</td></tr>
+        <tr><td><code>$(dir $@)</code></td><td>El directorio del objetivo: aquí <code>build/lib/</code>.</td></tr>
+      </tbody>
+    </table>
+    <p><code>| build</code> es un <strong>requisito de orden</strong>: asegura que exista el directorio antes, pero un cambio en la fecha del directorio no fuerza por sí solo a recompilar el objeto. No es el pipe de shell de <code>nm ... | grep ...</code>. Los requisitos de orden no entran en <code>$^</code>.</p>
+    <p><code>mkdir -p</code> crea los directorios necesarios y admite que ya existan; el <code>@</code> evita que Make muestre esa línea de comando. <code>-c</code> le dice a GCC que produzca un objeto, sin linkear todavía. Make decide qué recetas debe ejecutar según objetivos y dependencias; no es el compilador.</p>
+    <h3 id="recompilacion">Por qué make puede decir que ya está todo actualizado</h3>
+    <p>Ejecutar <code>make</code> <strong>no significa recompilar siempre todo</strong>. Para los objetivos que son archivos, Make comprueba si existen y compara sus fechas de modificación con las de sus requisitos normales. Si falta el objetivo o algún requisito es más reciente, ejecuta la receta para actualizarlo.</p>
+    <table>
+      <caption>Decisiones sobre mathlib.o en este Makefile</caption>
+      <thead><tr><th>Situación</th><th>Qué necesita hacer Make</th></tr></thead>
+      <tbody>
+        <tr><td>No existe <code>build/lib/mathlib.o</code>.</td><td>Compilar <code>mathlib.c</code> para crear el objeto.</td></tr>
+        <tr><td>El fuente es más reciente que el objeto.</td><td>Volver a compilar ese fuente.</td></tr>
+        <tr><td>El objeto existe y el fuente no es más reciente.</td><td>No recompilar ese objeto por esa dependencia.</td></tr>
+        <tr><td>Se actualizó el objeto de la biblioteca.</td><td>Actualizar el archive y después volver a linkear el ejecutable que depende de él.</td></tr>
+      </tbody>
+    </table>
+    <p>Los otros objetos que siguen actualizados se reutilizan. Si nada necesario para el objetivo pedido requiere trabajo, Make puede mostrar un mensaje como:</p>
+    <pre><code>make: Nothing to be done for 'all'.</code></pre>
+    <p>Es un ejemplo del mensaje, no una ejecución nueva. <strong>Make no compara por defecto el contenido de los archivos:</strong> usa las dependencias declaradas y sus fechas. Por eso actualizar la fecha de un fuente puede causar una recompilación aunque su texto sea igual; tampoco basta con decir «los .c no cambiaron» si falta un objeto o hay otro requisito desactualizado.</p>
+    <div class="note">
+      <span class="note-title">Límite concreto del Makefile del TP</span>
+      <p>La regla mostrada declara el <code>.c</code> como requisito, pero no sus headers <code>.h</code>. Tampoco genera ni incluye archivos de dependencias automáticas. Por eso cambiar solo un header puede dejar objetos viejos sin recompilar, aunque el código que deberían contener haya cambiado.</p>
+      <p>Cambiar <code>CFLAGS</code> u otras flags tampoco fuerza automáticamente una reconstrucción: Make no guarda ni compara el comando con el que se creó cada objeto. Eso no es una regla universal de todos los proyectos, sino una limitación de cómo se expresan las dependencias en este Makefile.</p>
+    </div>
+    <h3>Cómo forzar una reconstrucción, si se necesita</h3>
+    <pre><code>$ make -B
+$ make clean &amp;&amp; make</code></pre>
+    <p><code>-B</code> fuerza la actualización de los objetivos necesarios para la construcción solicitada, aunque sus fechas indiquen que están actualizados. Con <code>make -B</code> se pide la construcción normal: no significa que también se construya el objetivo <code>opt</code>.</p>
+    <p><code>make clean &amp;&amp; make</code> primero borra <code>build/</code> con la receta <code>clean</code> y después reconstruye el normal. <code>&amp;&amp;</code> ejecuta el segundo comando solo si el primero termina con éxito. Borrar <code>build/</code> también elimina un optimizado que pudiera estar allí; el segundo <code>make</code> no lo repone automáticamente.</p>
+    <p><strong>Estos comandos modifican los artefactos.</strong> No hay que ejecutarlos solo para inspeccionar o preservar una medición anterior. La regla de fechas explicada se aplica a objetivos de archivo: targets declarados <code>.PHONY</code>, como <code>clean</code> y los reportes del TP, no representan un archivo cuya fecha permita omitir su receta.</p>
+  </section>
+
+  <section id="archive">
+    <h2>4. Archivar no es linkear</h2>
+    <pre><code>$(STATIC_LIB): $(LIB_OBJS) | $(BUILD_DIR)
+    $(AR) rcs $@ $^
+    $(RANLIB) $@</code></pre>
+    <p>En este proyecto <code>AR = ar</code> y <code>RANLIB = ranlib</code>. La receta termina ejecutando <code>ar rcs build/libutils.a</code> con la lista de objetos. En <code>rcs</code>:</p>
+    <ul>
+      <li><code>r</code> inserta miembros o reemplaza los que tienen el mismo nombre.</li>
+      <li><code>c</code> suprime el aviso que se emitiría al crear un archive nuevo.</li>
+      <li><code>s</code> escribe el índice de símbolos, útil para que el linker encuentre definiciones.</li>
+    </ul>
+    <p><code>ranlib</code> genera ese índice también. Después de <code>ar ... s</code> resulta redundante para ese propósito, pero es lo que hace este Makefile; no lo cambiamos para estudiar.</p>
+    <pre><code>$ ar t build/libutils.a
+mathlib.o
+strutils.o
+hal_uart.o
+hal_ring.o
+hal_timer.o
+
+$ nm -A --defined-only build/libutils.a | grep ' math_factorial$'
+build/libutils.a:mathlib.o:0000000000000000 T math_factorial</code></pre>
+    <p class="source"><code>ar t</code> lista miembros, no funciones. <code>nm</code> lista símbolos; <code>-A</code> agrega archivo/miembro y <code>--defined-only</code> excluye los indefinidos. El filtro deja el nombre buscado al final de la línea (<code>$</code>).</p>
+    <p>La conclusión es concreta: <code>math_factorial</code> está definido globalmente como código (<code>T</code>) en el miembro <code>mathlib.o</code> de <code>libutils.a</code>. El cero es un valor relativo dentro de un objeto relocalizable, no su dirección definitiva en el ejecutable.</p>
+  </section>
+
+  <section id="enlace">
+    <h2>5. La aplicación pide definiciones a la biblioteca</h2>
+    <pre><code>$ gcc [flags] [objetos de app y demos] [objetos de plataforma] \
+    -Lbuild -lutils -o build/building_process_demo</code></pre>
+    <p><code>-Lbuild</code> agrega un directorio de búsqueda. <code>-lutils</code> pide buscar una biblioteca con ese nombre lógico; en este proyecto se creó <code>build/libutils.a</code>. En general <code>-l</code> también puede seleccionar una biblioteca compartida <code>.so</code> si está disponible y las opciones lo permiten: no significa por sí solo «enlace estático».</p>
+    <p>Los objetos consumidores van <strong>antes</strong> de la biblioteca: dejan referencias pendientes y el linker busca miembros que aporten esas definiciones. El orden de archivos estáticos importa; no debe suponerse que mover <code>-lutils</code> al principio es equivalente.</p>
+    <p>Hay dos decisiones diferentes: <strong>extraer un miembro</strong> del archive por sus definiciones, y después <strong>descartar secciones no alcanzables</strong>. El TP compila con <code>-ffunction-sections -fdata-sections</code> y linkea con <code>-Wl,--gc-sections</code>, por lo que no hay que afirmar que cada función de un miembro extraído siempre queda en el ejecutable.</p>
+    <p>¿Por qué la biblioteca no necesita a la aplicación para crearse? <code>ar</code> solo agrupa sus propios objetos: no ejecuta <code>main</code> ni necesita resolver toda referencia. En este TP tampoco hay referencias de la biblioteca a <code>main</code> o a las demos. Sí aparecen referencias de <code>strutils.o</code> a servicios del entorno, como <code>__ctype_b_loc</code> y <code>__stack_chk_fail</code> en el archive existente; pueden variar con la plataforma y las opciones del compilador.</p>
+    <div class="note">
+      <span class="note-title">Estática no significa ejecutable totalmente independiente</span>
+      <p>Las partes necesarias de <code>libutils.a</code> se incorporan durante el enlace: no se necesita distribuir ese archive para ejecutar el programa resultante. Pero el ejecutable puede seguir dependiendo de bibliotecas compartidas del sistema, como libc. Linkear una <code>.a</code> no equivale a usar <code>-static</code> para todo el programa. Para una comparativa a fondo sobre diferencias en compilación vs ejecución, consumo de RAM, herramientas del toolchain y criterios en sistemas embebidos, consultá la <a href="../reference/0003-biblioteca-estatica-vs-dinamica.html">Referencia 0003: biblioteca estática (.a) frente a dinámica (.so)</a>.</p>
+    </div>
+    <h3>Una explicación oral posible</h3>
+    <blockquote><p>«Los fuentes de lib y hal se compilan a cinco objetos. Ar los agrupa e indexa en libutils.a. La aplicación deja símbolos pendientes; el enlace busca sus definiciones en los miembros del archive usando -Lbuild y -lutils. Math_factorial está en mathlib.o. Crear la biblioteca no necesita main, aunque los objetos pueden conservar dependencias del sistema».</p></blockquote>
+  </section>
+
+  <section id="preguntas">
+    <h2>6. Comprobá lo que aprendiste</h2>
+    <form data-quiz>
+      <fieldset data-question>
+        <legend>P1. ¿Qué contiene libutils.a?</legend>
+        <label><input id="q1-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> La biblioteca agrupa archivos objeto como miembros de un contenedor.</label>
+        <label><input id="q1-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> La biblioteca es un ejecutable que inicia automáticamente las demos.</label>
+        <label><input id="q1-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> El miembro mathlib.o contiene la definición global de math_factorial aquí.</label>
+        <label><input id="q1-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> El comando ar lista directamente las llamadas realizadas durante ejecución.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y C.</strong> El archive contiene cinco objetos, incluido <code>mathlib.o</code>; <code>nm -A</code> muestra su definición de <code>math_factorial</code>. B confunde archive y ejecutable. D es falsa: <code>ar t</code> lista miembros, no una traza de llamadas.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P2. ¿Qué significan las variables de la receta de compilación?</legend>
+        <label><input id="q2-a" type="checkbox" data-correct="false"> <span class="option-letter">A.</span> La expresión $@ representa siempre el primer requisito del objetivo.</label>
+        <label><input id="q2-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> La expresión $&lt; representa el primer requisito de esa regla.</label>
+        <label><input id="q2-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> La expresión $@ representa el archivo objetivo de esa regla.</label>
+        <label><input id="q2-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> La expresión $^ incluye también todos los requisitos de orden.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: B y C.</strong> Para el objeto matemático, <code>$&lt;</code> es el fuente y <code>$@</code> el objeto. A los intercambia. <code>$^</code> excluye requisitos de orden y duplicados; D es falsa.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P3. ¿Qué hacen ar rcs y ranlib?</legend>
+        <label><input id="q3-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> La operación r inserta miembros o reemplaza los nombres existentes.</label>
+        <label><input id="q3-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> La operación s ejecuta las funciones para descubrir sus dependencias.</label>
+        <label><input id="q3-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> La herramienta ranlib transforma el archivo contenedor en código ejecutable.</label>
+        <label><input id="q3-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> La herramienta ranlib genera también un índice para la biblioteca.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y D.</strong> <code>r</code> actualiza miembros y tanto <code>s</code> como <code>ranlib</code> generan el índice. B y C son falsas: estas herramientas no ejecutan la biblioteca ni crean el programa final.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P4. ¿Cómo se busca la biblioteca durante el enlace?</legend>
+        <label><input id="q4-a" type="checkbox" data-correct="false"> <span class="option-letter">A.</span> La opción -Lbuild agrega todos los fuentes dentro del ejecutable.</label>
+        <label><input id="q4-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> La opción -Lbuild agrega un directorio donde buscar las bibliotecas.</label>
+        <label><input id="q4-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> El orden permite consultar la biblioteca después de sus consumidores.</label>
+        <label><input id="q4-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> La opción -lutils implica siempre un ejecutable completamente linkeado estáticamente.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: B y C.</strong> <code>-L</code> amplía la búsqueda y el archive se consulta con referencias pendientes. A confunde directorio de búsqueda con compilación. D es falsa: se pueden mezclar la biblioteca estática del TP y dependencias dinámicas del sistema.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P5. ¿Qué dependencias y selecciones deben distinguirse?</legend>
+        <label><input id="q5-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> Archivar objetos no requiere resolver previamente todas sus referencias externas.</label>
+        <label><input id="q5-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> Extraer un miembro garantiza conservar siempre todas sus funciones originales.</label>
+        <label><input id="q5-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> Toda biblioteca estática debe definir main para poder ser creada.</label>
+        <label><input id="q5-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> Descartar secciones ocurre separadamente de seleccionar miembros de la biblioteca.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y D.</strong> <code>ar</code> puede archivar objetos con referencias <code>U</code>. El enlace selecciona miembros y la recolección de secciones puede descartar partes no alcanzables. Por eso B es falsa. C exige un punto de entrada a un contenedor que no es un ejecutable.</p></div>
+      </fieldset>
+      <button type="submit">Comprobar respuestas</button>
+      <p data-quiz-summary role="status" aria-live="polite"></p>
+    </form>
+  </section>
+  <p class="source"><span class="note-title">Fuentes</span> <a href="../tps/tp3/trabajo_practico/Makefile">Makefile</a>, líneas 18–38 y 71–92; <a href="../tps/tp3/trabajo_practico/README.md">README</a>, hito 11. Manuales primarios: <a href="https://sourceware.org/binutils/docs/binutils/ar.html">GNU ar</a>, <a href="https://sourceware.org/binutils/docs/binutils/ranlib.html">ranlib</a>, <a href="https://sourceware.org/binutils/docs/binutils/nm.html">nm</a>, GNU Make <a href="https://www.gnu.org/software/make/manual/html_node/Automatic-Variables.html">variables automáticas</a> y <a href="https://www.gnu.org/software/make/manual/html_node/Prerequisite-Types.html">tipos de requisitos</a>, GCC <a href="https://gcc.gnu.org/onlinedocs/gcc/Link-Options.html">enlace</a>. Comandos de inspección leídos con GNU Binutils 2.42.</p>
+  <nav class="lesson-nav" aria-label="Navegación de la lección">
+    <a href="../index.html">Índice de lecciones</a>
+    <a href="0008-hitos-10-13-demos-y-version.html">Lección anterior</a>
+    <a href="0010-hito-12-optimizacion-y-tamanos.html">Siguiente lección</a>
+    <a href="#preguntas">Ir al cuestionario</a>
+  </nav>
+</main>
+</body>
+</html>

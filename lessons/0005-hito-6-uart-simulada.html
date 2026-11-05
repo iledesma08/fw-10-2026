@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hito 6: UART simulada y operaciones de bits</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+</head>
+<body>
+<main>
+  <p class="kicker">Preparación TP3 · Lección 0005</p>
+  <h1>Hito 6: UART simulada</h1>
+  <p class="lead">Al terminar vas a poder reconstruir la línea <code>uart BRR=138 SR=0x00000040 DR=0x0000004B</code> desde el código, sin memorizarla, y explicar qué representa cada valor.</p>
+  <section id="uart">
+    <h2>1. Para qué sirve una UART</h2>
+    <p>Una <strong>UART</strong> (transmisor/receptor asíncrono universal) permite comunicar dispositivos enviando y recibiendo datos en serie: los bits viajan uno después de otro. Por ejemplo, un microcontrolador puede mandar una medición a otro dispositivo o recibir un comando.</p>
+    <pre><code>Dispositivo A                         Dispositivo B
+UART: TX  ─────── bits en serie ─────► UART: RX
+UART: RX  ◄────── bits en serie ───── UART: TX</code></pre>
+    <p><code>TX</code> es transmisión y <code>RX</code> recepción. Es asíncrona porque no se comparte una línea de reloj para marcar cada bit: ambos extremos acuerdan la velocidad y el formato. En una UART real habitual hay bits de inicio y parada, además de los datos y, si se configura, paridad.</p>
+    <p><strong>115200 baudios no significa 115200 caracteres por segundo.</strong> Baudios mide símbolos por segundo; en la UART binaria habitual cada símbolo lleva un bit. Si, por ejemplo, se usa un bit de inicio, ocho bits de datos y un bit de parada (8N1), <strong>transmitir cada byte de datos requiere diez bits en la línea</strong>: una trama de diez símbolos. Un byte sigue teniendo ocho bits; los otros dos son de encuadre. A 115200 baudios se transmiten hasta 115200 símbolos por segundo, equivalentes a <code>115200 / 10 = 11520</code> tramas por segundo, cada una con un byte útil: un máximo teórico de <strong>11520 bytes de datos por segundo</strong>. Ese formato es un ejemplo de hardware real, no una configuración implementada por esta simulación.</p>
+    <div class="note">
+      <span class="note-title">Qué hace realmente este TP</span>
+      <p>No hay señales eléctricas, pines ni tiempos de transmisión. La UART es una <strong>estructura en memoria</strong>. «Enviar» un byte aquí significa escribirlo en <code>DR</code> y encender un bit de estado en <code>SR</code>. No hay receptor implementado, aunque se active su bit de habilitación.</p>
+      <p>La utilidad didáctica es aprender cómo un driver configura y consulta registros. Los números y bits son los del modelo del TP: no hay que trasladar su fórmula de velocidad o sus posiciones de bits a cualquier microcontrolador.</p>
+    </div>
+  </section>
+
+  <section id="registros">
+    <h2>2. Cinco registros, cinco campos</h2>
+    <p>En hardware, un registro es un lugar mediante el cual el software configura un periférico o consulta su estado. En el TP se representa cada registro con un campo de 32 bits:</p>
+    <pre><code>// hal_uart.h:16–23 (sin los comentarios)
+typedef struct {
+  volatile uint32_t CR1;
+  volatile uint32_t CR2;
+  volatile uint32_t SR;
+  volatile uint32_t DR;
+  volatile uint32_t BRR;
+} uart_regs_t;</code></pre>
+    <table>
+      <caption>Qué representa cada campo en este modelo</caption>
+      <thead><tr><th>Campo</th><th>Función</th></tr></thead>
+      <tbody>
+        <tr><td><code>CR1</code></td><td>Control: habilita la UART, la transmisión y la recepción mediante bits.</td></tr>
+        <tr><td><code>CR2</code></td><td>Reservado; el driver del TP no lo usa ni lo inicializa explícitamente.</td></tr>
+        <tr><td><code>SR</code></td><td>Estado: el bit 6 representa transmisión completa.</td></tr>
+        <tr><td><code>DR</code></td><td>Datos: conserva el último byte «transmitido».</td></tr>
+        <tr><td><code>BRR</code></td><td>Valor calculado a partir del reloj y la velocidad solicitada.</td></tr>
+      </tbody>
+    </table>
+    <p><code>uint32_t</code> es entero sin signo de 32 bits, no de 32 bytes.</p>
+    <h3 id="volatile">Por qué se usa volatile en los registros</h3>
+    <p>Imaginá dos escrituras sobre una variable ordinaria:</p>
+    <pre><code>registro = 1;
+registro = 2;</code></pre>
+    <p>Si nada observa el valor intermedio, el compilador puede concluir que guardar 1 no sirve porque se reemplaza inmediatamente. Podría generar algo equivalente a solo <code>registro = 2;</code>. Para una variable común eso puede ser perfectamente válido.</p>
+    <p>Ahora imaginá un registro de hardware hipotético en el que escribir 1 enciende un dispositivo y escribir 2 inicia una medición. Eliminar la primera escritura cambiaría lo que hace el dispositivo, aunque el valor final siguiera siendo 2.</p>
+    <pre><code>volatile uint32_t registro;
+
+registro = 1;
+registro = 2;</code></pre>
+    <p>Con <code>volatile</code>, esas escrituras son accesos relevantes: el compilador no puede descartar la primera simplemente porque después se escribe otro valor. <strong>No importa solo qué queda al final; también importa realizar los accesos.</strong> Este ejemplo ilustra una posible interfaz de hardware, no el significado de los valores 1 y 2 en los registros del TP.</p>
+    <h3>También importa volver a leer</h3>
+    <p>En un periférico real, el hardware podría actualizar una bandera de estado sin que el programa ejecute una asignación. Un bucle de espera didáctico sería:</p>
+    <pre><code>// Ejemplo de espera; este bucle no aparece en el TP.
+while (uart-&gt;SR == 0) {
+  // Esperar un cambio de estado.
+}</code></pre>
+    <p>Si <code>SR</code> fuera una variable ordinaria y el compilador pudiera deducir que el código no la modifica, podría evitar volver a leerla en cada vuelta. Pero una UART real podría cambiar su estado al recibir un byte o terminar una operación. Con el campo declarado <code>volatile</code>, la lectura de cada evaluación debe respetarse: no se puede sustituir por reutilizar indefinidamente una lectura anterior.</p>
+    <p>Eso es lo que significa «causas externas al código» en este contexto: un contador que avanza con el reloj o un periférico que actualiza sus registros independientemente de las instrucciones del programa. El bucle es ilustrativo; un driver real debe consultar la bandera específica que corresponda, según el manual de su periférico.</p>
+    <div class="note">
+      <span class="note-title">En la simulación no hay actividad autónoma</span>
+      <p><code>volatile</code> no crea hardware ni hace pasar tiempo. Los registros del TP son campos de una estructura y cambian porque las funciones del programa los escriben. La declaración reproduce una característica habitual de los registros reales, pero no agrega un dispositivo que vaya a modificar <code>SR</code> por su cuenta. Si nadie cambia ese campo, un bucle que espera ese cambio no termina por usar <code>volatile</code>.</p>
+    </div>
+    <h3>Lo que volatile no garantiza</h3>
+    <p>No significa «desactivar todas las optimizaciones» ni «hacer todo seguro». Por ejemplo:</p>
+    <pre><code>volatile uint32_t contador;
+// Suponiendo que contador ya tiene un valor válido:
+contador++;</code></pre>
+    <p>Incrementar implica conceptualmente leer, sumar y escribir. <code>volatile</code> no garantiza que esos pasos sean una operación indivisible (atómica), no sincroniza hilos ni protege frente a accesos concurrentes. Tampoco es una barrera general para ordenar accesos a otras variables no volátiles.</p>
+    <p><strong>Resumen:</strong> en un objeto <code>volatile</code>, los accesos también importan porque pueden observar o provocar efectos que el compilador no puede deducir mirando solo el código ordinario.</p>
+    <h3 id="instancia">La instancia sim_uart: visibilidad y persistencia</h3>
+    <p><code>uart_regs_t</code> es el <strong>tipo</strong>: describe la estructura de registros de una UART simulada. Para guardar los datos de una UART concreta, la demo declara una variable de ese tipo:</p>
+    <pre><code>// demo_embedded.c:20, fuera de todas las funciones
+static uart_regs_t sim_uart;</code></pre>
+    <p>A esta variable la llamamos una <strong>instancia</strong> de la estructura (el objeto real en memoria que contiene los cinco campos).</p>
+    <p>¿Qué significan su ubicación y la palabra <code>static</code>?</p>
+    <ul>
+      <li><strong>Visibilidad privada al archivo (enlace interno):</strong> al estar fuera de las funciones, la palabra <code>static</code> restringe el alcance del nombre <code>sim_uart</code> exclusivamente a <code>demo_embedded.c</code>. Ningún otro archivo <code>.c</code> puede acceder a ella directamente por su nombre usando <code>extern</code>. Para compartirla con funciones de otros módulos (como <code>uart_init</code> o <code>uart_send</code>), se pasa explícitamente un puntero a su dirección en memoria (<code>&amp;sim_uart</code>).</li>
+      <li><strong>Persistencia en memoria (.bss):</strong> al estar declarada fuera de las funciones, no se aloja en el stack sino en memoria estática (la sección <code>.bss</code> en RAM). Por lo tanto, vive durante toda la ejecución del programa y no se destruye al salir de la función <code>demo_embedded</code>. C garantiza que las variables en <code>.bss</code> se inicializan automáticamente con todos sus campos en cero antes de que comience el programa.</li>
+    </ul>
+    <table>
+      <caption>Valores de sim_uart en esta demo</caption>
+      <thead><tr><th>Campo</th><th>Antes de llamar a uart_init</th><th>Tras uart_init con 115200</th></tr></thead>
+      <tbody>
+        <tr><td><code>CR1</code></td><td><code>0</code></td><td><code>0x200C</code></td></tr>
+        <tr><td><code>CR2</code></td><td><code>0</code></td><td><code>0</code></td></tr>
+        <tr><td><code>SR</code></td><td><code>0</code></td><td><code>0</code></td></tr>
+        <tr><td><code>DR</code></td><td><code>0</code></td><td><code>0</code></td></tr>
+        <tr><td><code>BRR</code></td><td><code>0</code></td><td><code>138</code></td></tr>
+      </tbody>
+    </table>
+    <p>La primera columna de valores corresponde a la inicialización del programa, antes de la primera llamada. <code>uart_init</code> configura después los registros: modifica <code>CR1</code> y <code>BRR</code>, y escribe cero explícitamente en <code>SR</code> y <code>DR</code>. <strong>No toca CR2:</strong> ese campo sigue en cero porque empezó en cero y la demo no lo modifica. Volver a llamar a la demo no vuelve a crear ni a inicializar implícitamente <code>sim_uart</code>; sí ejecuta otra vez las asignaciones de <code>uart_init</code>.</p>
+  </section>
+
+  <section id="bits">
+    <h2>3. Encender un bit sin borrar los demás</h2>
+    <pre><code>// mathlib.h:49–51
+static inline uint32_t bit_set(uint32_t reg, uint8_t bit) {
+  return reg | (1U &lt;&lt; bit);
+}</code></pre>
+    <p>Los bits se numeran desde cero, empezando por el menos significativo (a la derecha). <code>1U &lt;&lt; bit</code> construye una <strong>máscara</strong>: un único 1 en la posición elegida. El sufijo <code>U</code> indica un entero sin signo. El contrato de esta función limita las posiciones a 0–31.</p>
+    <pre><code>Ejemplo de ocho bits, para ver la idea:
+registro previo:   00001000   bit 3 encendido
+máscara 1U &lt;&lt; 2:   00000100   elijo el bit 2
+OR (|):            00001100   quedan encendidos 3 y 2</code></pre>
+    <p>OR da 1 si al menos uno de los bits de entrada es 1. En la posición elegida lo fuerza a 1; donde la máscara tiene 0, conserva el valor anterior. A diferencia de XOR, <strong>OR no apaga un bit que ya estaba encendido</strong>: volver a aplicar la misma máscara lo deja en 1.</p>
+    <p><code>bit_set</code> recibe un valor y <strong>devuelve otro valor</strong>; no recibe un puntero al registro. Por eso el driver asigna el retorno: <code>uart-&gt;CR1 = bit_set(uart-&gt;CR1, 3)</code>. Llamarla sin usar su retorno no modificaría <code>CR1</code>.</p>
+    <p>Esta función tiene cuerpo en <code>mathlib.h</code> y es <code>static inline</code>. Es la excepción al header con solo prototipos que ya vimos: puede aportar una definición local a las unidades de traducción que lo incluyen; <code>inline</code> no obliga al compilador a insertar el cuerpo en cada llamada.</p>
+  </section>
+
+  <section id="init">
+    <h2>4. Inicializar: reloj, control y estado</h2>
+    <pre><code>// hal_uart.c:11–20
+void uart_init(uart_regs_t *uart, uint32_t baudrate) {
+  uart-&gt;BRR = UART_PERIPH_CLK_HZ / baudrate;
+
+  uart-&gt;CR1 = bit_set(0U, 13);
+  uart-&gt;CR1 = bit_set(uart-&gt;CR1, 3);
+  uart-&gt;CR1 = bit_set(uart-&gt;CR1, 2);
+
+  uart-&gt;SR = 0U;
+  uart-&gt;DR = 0U;
+}</code></pre>
+    <p><code>uart</code> apunta a la instancia que se modifica; <code>uart-&gt;BRR</code> accede a su campo <code>BRR</code>. El header fija <code>UART_PERIPH_CLK_HZ = 16000000U</code>: 16 MHz, es decir, 16 millones de ciclos por segundo. La demo solicita <code>115200U</code>.</p>
+    <h3 id="relojes-distintos">Para qué sirve el divisor: comunicar dispositivos con relojes distintos</h3>
+    <p><strong>Dos dispositivos no necesitan tener el mismo reloj interno para comunicarse por UART.</strong> Necesitan acordar la velocidad de la línea y el formato de la trama. Cada dispositivo configura su propia UART a partir de su propio reloj para que la duración de los bits sea compatible con la del otro.</p>
+    <p>El divisor permite obtener ese ritmo de comunicación a partir del reloj local. Por ejemplo, usando un modelo ideal sencillo de división directa y una velocidad elegida de 100000 baudios:</p>
+    <pre><code>Dispositivo A: reloj de 16 MHz / divisor 160 → 100000 bits/s
+Dispositivo B: reloj de  8 MHz / divisor  80 → 100000 bits/s
+
+Relojes internos distintos, divisores distintos,
+pero el mismo ritmo de bits en la comunicación.</code></pre>
+    <p>Ese ejemplo usa números redondos para mostrar la finalidad; no es la configuración de la demo ni una fórmula universal de cualquier UART. <strong>No hay que copiar el mismo divisor en ambos dispositivos:</strong> si sus relojes son distintos, normalmente necesitan valores de configuración distintos para alcanzar la misma velocidad.</p>
+    <p>El transmisor marca la duración de cada bit con su reloj local. El receptor detecta el bit de inicio y usa su propio reloj, configurado para esa velocidad, para tomar muestras de los bits siguientes. Así puede interpretar la trama sin una línea de reloj compartida. Si los ritmos difieren demasiado, las muestras se desplazan respecto de los bits y puede haber errores.</p>
+    <p><strong>El objetivo es que las velocidades reales sean suficientemente próximas.</strong> No se garantiza que sean idénticas ni que desaparezca cualquier problema de sincronismo: influyen la precisión de los relojes, el redondeo de los divisores y la tolerancia del receptor. También debe coincidir el formato de trama. Los límites y cálculos exactos dependen del periférico real.</p>
+    <h3 id="velocidad-y-divisor">115200 y 138 no representan lo mismo</h3>
+    <table>
+      <caption>Reloj, velocidad solicitada y configuración calculada</caption>
+      <thead><tr><th>Número</th><th>Qué representa</th><th>Dónde aparece</th></tr></thead>
+      <tbody>
+        <tr><td><code>16000000</code></td><td>Frecuencia del reloj del periférico: 16 millones de ciclos por segundo (16 MHz).</td><td>Constante <code>UART_PERIPH_CLK_HZ</code>.</td></tr>
+        <tr><td><code>115200</code></td><td>Velocidad de comunicación solicitada: 115200 baudios. En la UART binaria habitual corresponde a 115200 bits en la línea por segundo, no a bytes por segundo.</td><td>Argumento <code>baudrate</code> al llamar a <code>uart_init</code>.</td></tr>
+        <tr><td><code>138</code></td><td>Valor de configuración calculado a partir del reloj y la velocidad: el divisor entero de este modelo. No son 138 baudios ni 138 bytes por segundo.</td><td>Campo <code>BRR</code>, después de inicializar.</td></tr>
+      </tbody>
+    </table>
+    <p>Volviendo al TP: con su modelo, el cociente indica aproximadamente cuántos ciclos de reloj corresponden a un bit de la línea: <code>16000000 / 115200 ≈ 138,89</code>. El código solo conserva la parte entera y guarda 138:</p>
+    <pre><code>BRR = 16000000 / 115200
+    = 138                    división entera: se descarta la fracción</code></pre>
+    <p><strong>115200 es lo que pedimos; 138 es cómo lo representa este modelo en el registro.</strong> La línea <code>uart BRR=138</code> muestra la configuración calculada, no una velocidad de 138 baudios. La división entera pierde precisión; ni siquiera un divisor físico de 138 produciría exactamente 115200 bits por segundo con ese reloj. En el TP no se genera ningún ritmo real: solo se calcula y almacena el número.</p>
+    <p>Este resultado no se calcula con 8 MHz, ni se redondea al entero más cercano. Es la fórmula simplificada del TP; una UART real puede usar otro divisor, sobremuestreo y campos fraccionarios. Además, <strong>baudrate debe ser distinto de cero</strong>: el header lo exige y el cuerpo no valida esa precondición.</p>
+    <table>
+      <caption>Construcción de CR1</caption>
+      <thead><tr><th>Paso</th><th>Máscara</th><th>CR1 resultante</th></tr></thead>
+      <tbody>
+        <tr><td>Habilitar UART (UE, bit 13), partiendo de cero</td><td><code>1U &lt;&lt; 13 = 0x2000</code></td><td><code>0x2000</code></td></tr>
+        <tr><td>Habilitar transmisión (TE, bit 3)</td><td><code>1U &lt;&lt; 3 = 0x0008</code></td><td><code>0x2008</code></td></tr>
+        <tr><td>Habilitar recepción (RE, bit 2)</td><td><code>1U &lt;&lt; 2 = 0x0004</code></td><td><code>0x200C</code></td></tr>
+      </tbody>
+    </table>
+    <p>La primera asignación usa <code>0U</code>, no el <code>CR1</code> previo: comienza una configuración nueva. Las siguientes conservan los bits que se acaban de habilitar. Al terminar, <code>SR = 0</code> y <code>DR = 0</code>; todavía no se envió ningún byte. El valor <code>CR1 = 0x200C</code> se deriva del código, aunque la demo no lo imprime.</p>
+  </section>
+
+  <section id="envio">
+    <h2>5. Enviar OK: dos escrituras, no una cola</h2>
+    <pre><code>// hal_uart.c:22–30
+void uart_send_byte(uart_regs_t *uart, uint8_t byte) {
+  uart-&gt;DR = byte;
+  uart-&gt;SR = bit_set(uart-&gt;SR, 6);
+}
+
+void uart_send(uart_regs_t *uart, const uint8_t *data, uint32_t len) {
+  for (uint32_t i = 0; i &lt; len; i++)
+    uart_send_byte(uart, data[i]);
+}</code></pre>
+    <p><code>uart_send</code> recorre exactamente <code>len</code> bytes y delega cada uno a <code>uart_send_byte</code>. No busca un NUL. En esta simulación cada llamada escribe el byte en <code>DR</code> y enciende inmediatamente el bit 6 de <code>SR</code>, llamado TC (transmisión completa).</p>
+    <pre><code>// demo_embedded.c:24 y 34–35
+static const uint8_t msg[] = {'O', 'K'};
+uart_init(&amp;sim_uart, 115200U);
+uart_send(&amp;sim_uart, msg, (uint32_t)sizeof(msg));</code></pre>
+    <p>El array tiene <strong>dos bytes, sin terminador NUL</strong>: son dos elementos explícitos, no el literal de string <code>"OK"</code>, que incluiría un tercer byte nulo al inicializar un array. Aquí <code>sizeof(msg)</code> vale 2. <code>&amp;sim_uart</code> pasa la dirección de la estructura original.</p>
+    <table>
+      <caption>Traza de los registros (códigos ASCII del entorno del TP)</caption>
+      <thead><tr><th>Momento</th><th>DR</th><th>SR</th><th>Qué queda guardado</th></tr></thead>
+      <tbody>
+        <tr><td>Después de init</td><td><code>0x00</code></td><td><code>0x00</code></td><td>Sin datos enviados.</td></tr>
+        <tr><td>Después de enviar <code>'O'</code></td><td><code>0x4F</code></td><td><code>0x40</code></td><td>El primer byte y el bit 6 encendido.</td></tr>
+        <tr><td>Después de enviar <code>'K'</code></td><td><code>0x4B</code></td><td><code>0x40</code></td><td>El último byte; el mismo bit sigue encendido.</td></tr>
+      </tbody>
+    </table>
+    <p><code>1U &lt;&lt; 6</code> vale 64 decimal, <code>0x40</code> hexadecimal. Encenderlo otra vez no suma otros 64: OR lo deja en 1. <code>DR</code> se sobrescribe y conserva solo <code>'K'</code>; no almacena el string completo ni una cola de bytes.</p>
+    <div class="note">
+      <span class="note-title">No confundir el modelo con un driver real</span>
+      <p>El TP no espera a que el hardware esté listo, no limpia TC antes del siguiente envío ni simula cuánto tarda cada byte. En un periférico real, el significado y la forma de limpiar las banderas se consultan en su manual; el hardware suele actualizar el estado al completar una transmisión. No se puede deducir de este código que escribir dos veces en un registro real siempre transmita correctamente ambos bytes.</p>
+    </div>
+  </section>
+
+  <section id="salida">
+    <h2>6. De los registros a la línea impresa</h2>
+    <p>Después de enviar los dos bytes, la demo imprime <code>BRR</code> en decimal y <code>SR</code> y <code>DR</code> con <code>print_hex(valor, 8)</code>. Los ocho dígitos muestran los 32 bits, incluyendo ceros a la izquierda; no indican que el dato útil ocupe ocho bytes.</p>
+    <pre><code>uart BRR=138 SR=0x00000040 DR=0x0000004B</code></pre>
+    <p>Es la salida esperada por la consigna y derivada de esta traza, no una nueva ejecución del binario. La demo no imprime <code>"OK"</code> por esa UART: imprime una descripción de los registros mediante <code>print_str</code>, <code>print_dec</code> y <code>print_hex</code> por la consola host. La trama con CRC de otro hito pasa por el ring buffer, no se transmite automáticamente por esta UART.</p>
+    <h3>Una explicación oral posible</h3>
+    <blockquote><p>«La UART del TP son registros simulados en memoria. Inicializo el divisor con 16 millones dividido por 115200: da 138. En CR1 habilito los bits 13, 3 y 2. Después envío O y K: cada llamada sobrescribe DR y enciende el bit 6 de SR. Por eso al final DR guarda K, 4B hexadecimal, y SR vale 40 hexadecimal».</p></blockquote>
+  </section>
+
+  <section id="preguntas">
+    <h2>7. Comprobá lo que aprendiste</h2>
+    <form data-quiz>
+      <fieldset data-question>
+        <legend>P1. ¿Qué describe la UART de este TP?</legend>
+        <label><input id="q1-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> Los registros son campos de una estructura guardada en memoria.</label>
+        <label><input id="q1-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> La palabra volatile transforma automáticamente los campos en hardware real.</label>
+        <label><input id="q1-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> La simulación escribe datos sin representar tiempos ni señales eléctricas.</label>
+        <label><input id="q1-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> La velocidad configurada expresa directamente cuántos caracteres transmite por segundo.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y C.</strong> El driver modifica campos de <code>uart_regs_t</code>; no genera señales ni simula tiempos. B es falsa: <code>volatile</code> afecta el tratamiento de los accesos por el compilador, no crea hardware. D confunde baudios con caracteres por segundo: en una UART real también hay bits de encuadre.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P2. ¿Cómo se inicializan BRR y CR1?</legend>
+        <label><input id="q2-a" type="checkbox" data-correct="false"> <span class="option-letter">A.</span> El divisor usa ocho millones y produce el valor 69.</label>
+        <label><input id="q2-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> La división entera del reloj por 115200 produce exactamente 138.</label>
+        <label><input id="q2-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> La inicialización conserva todos los bits del registro CR1 anterior.</label>
+        <label><input id="q2-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> El control termina habilitando los bits trece, tres y dos.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: B y D.</strong> El reloj es 16000000 y la división es entera: <code>BRR = 138</code>. Los bits 13, 3 y 2 producen <code>CR1 = 0x200C</code>. A usa otro reloj. C es falsa: la primera asignación calcula <code>bit_set(0U, 13)</code>, por lo que reemplaza la configuración anterior.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P3. ¿Qué hace bit_set(reg, bit)?</legend>
+        <label><input id="q3-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> La máscara contiene un único uno en la posición elegida.</label>
+        <label><input id="q3-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> La operación OR conserva los demás bits del valor recibido.</label>
+        <label><input id="q3-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> Aplicar nuevamente la máscara apaga siempre el bit previamente encendido.</label>
+        <label><input id="q3-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> La función modifica directamente CR1 aunque ignoremos el valor devuelto.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y B.</strong> <code>1U &lt;&lt; bit</code> selecciona una posición; OR la fuerza a 1 y conserva el resto. C describe un efecto de XOR, no de OR. D es falsa: la función recibe un valor y devuelve el nuevo; el llamador debe asignarlo al registro.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P4. ¿Qué ocurre después de enviar O y luego K?</legend>
+        <label><input id="q4-a" type="checkbox" data-correct="false"> <span class="option-letter">A.</span> El registro DR guarda ambos caracteres formando un string completo.</label>
+        <label><input id="q4-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> El registro DR conserva solamente K como último byte enviado.</label>
+        <label><input id="q4-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> El segundo envío apaga la bandera encendida durante el primero.</label>
+        <label><input id="q4-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> El registro SR conserva el bit seis encendido al terminar.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: B y D.</strong> <code>DR</code> se sobrescribe en cada llamada: termina en <code>0x4B</code>, código ASCII de K. El bit 6 de <code>SR</code> queda encendido: <code>0x40</code>. A supone una cola o string que no existe. C es falsa porque OR no apaga un bit ya encendido.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P5. ¿Cómo se relacionan el buffer y la salida de la demo?</legend>
+        <label><input id="q5-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> El array contiene dos bytes sin agregar ningún terminador nulo.</label>
+        <label><input id="q5-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> El envío recorre los datos hasta encontrar el terminador nulo.</label>
+        <label><input id="q5-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> La línea impresa demuestra una transmisión eléctrica realizada entre dispositivos.</label>
+        <label><input id="q5-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> La consola muestra registros usando las funciones habituales de impresión.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y D.</strong> El inicializador <code>{'O', 'K'}</code> contiene solo dos bytes y <code>uart_send</code> usa la longitud explícita. B confunde un buffer binario con un string terminado en NUL. La consola host imprime los valores de los registros; no demuestra una transmisión física, así que C es falsa.</p></div>
+      </fieldset>
+      <button type="submit">Comprobar respuestas</button>
+      <p data-quiz-summary role="status" aria-live="polite"></p>
+    </form>
+  </section>
+  <p class="source"><span class="note-title">Fuentes</span> <a href="../tps/tp3/trabajo_practico/README.md">Consigna del TP3</a>, hito 6; <a href="../tps/tp3/trabajo_practico/src/hal/hal_uart.h">hal_uart.h</a> y <a href="../tps/tp3/trabajo_practico/src/hal/hal_uart.c">hal_uart.c</a>; <a href="../tps/tp3/trabajo_practico/src/lib/mathlib.h">mathlib.h</a>, líneas 43–51; <a href="../tps/tp3/trabajo_practico/src/demo/demo_embedded.c">demo_embedded.c</a>, líneas 20–43; <a href="../tps/tp3/trabajo_practico/src/platform/print.c">print.c</a>. Semántica del lenguaje: <a href="https://gcc.gnu.org/onlinedocs/gcc/Volatiles.html">GCC: When is a Volatile Object Accessed?</a>; <a href="https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf">borrador público C11, N1570</a>, §§6.5.5 (división), 6.5.7 (desplazamientos), 6.5.12 (OR), 6.7.3 (calificadores) y 6.7.9 (inicialización).</p>
+  <nav class="lesson-nav" aria-label="Navegación de la lección">
+    <a href="../index.html">Índice de lecciones</a>
+    <a href="0006-hito-7-buffer-circular.html">Siguiente lección</a>
+    <a href="0004-hito-5-trim-y-crc8.html">Lección anterior</a>
+    <a href="#uart">Volver al inicio</a>
+    <a href="#preguntas">Ir al cuestionario</a>
+  </nav>
+</main>
+</body>
+</html>

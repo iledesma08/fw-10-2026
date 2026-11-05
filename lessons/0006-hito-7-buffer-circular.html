@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hito 7: buffer circular</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+</head>
+<body>
+<main>
+  <p class="kicker">Preparación TP3 · Lección 0006</p>
+  <h1>Hito 7: buffer circular</h1>
+  <p class="lead">Al terminar vas a poder seguir dónde se escribe y se lee cada byte, explicar el salto del índice 31 al 0 y justificar por qué la demo imprime <code>ring: ABCDEFGHIJ</code>.</p>
+
+  <section id="utilidad">
+    <h2>1. Para qué sirve guardar datos en una cola</h2>
+    <p>Imaginá que llegan varios bytes y el programa todavía está ocupado procesando el anterior. Hace falta un lugar para guardar los pendientes y recuperarlos en orden. Un <strong>buffer circular</strong> usa un array de tamaño fijo como una cola: se escribe por un extremo y se lee por el otro.</p>
+    <pre><code>Productor       Cola         Consumidor
+agrega A B C → [ A B C ] → obtiene A B C
+
+FIFO: primero en entrar, primero en salir.</code></pre>
+    <p>Puede servir para desacoplar momentáneamente la llegada de datos de su procesamiento. No permite acumular una cantidad ilimitada: si el productor agrega más rápido de lo que el consumidor retira durante demasiado tiempo, el buffer se llena.</p>
+    <p>¿Por qué <strong>circular</strong>? Al llegar al final del array, el índice vuelve al principio y reutiliza lugares que ya quedaron libres. No hay que desplazar todos los bytes para sacar el primero. Los datos no giran físicamente: <strong>avanzan los índices</strong>.</p>
+    <div class="note">
+      <span class="note-title">El caso real y el caso del TP</span>
+      <p>Una aplicación podría usar una cola para datos recibidos por UART. Pero en el hito 7 del TP la demo agrega las letras con un bucle y después las retira con otro; no hay una UART alimentando automáticamente este buffer. Esta implementación tampoco incluye sincronización para hilos o interrupciones concurrentes.</p>
+      <p>Seguimos el código existente sin modificar ni recompilar C. Las salidas se explican mediante trazas, no son una nueva ejecución del binario.</p>
+    </div>
+  </section>
+
+  <section id="estado">
+    <h2>2. Capacidad, índices y cantidad de datos</h2>
+    <pre><code>// hal_ring.h:14–22 (sin los comentarios)
+#define RING_BUF_SIZE 32
+
+typedef struct {
+  uint8_t data[RING_BUF_SIZE];
+  uint16_t head;
+  uint16_t tail;
+  uint16_t count;
+} ring_buf_t;</code></pre>
+    <table>
+      <caption>Los cuatro campos del buffer</caption>
+      <thead><tr><th>Campo</th><th>Qué significa</th></tr></thead>
+      <tbody>
+        <tr><td><code>data[32]</code></td><td>Almacena los bytes en índices de 0 a 31; el almacenamiento vive dentro de la estructura.</td></tr>
+        <tr><td><code>head</code></td><td>Índice del próximo lugar donde escribir, si no está lleno.</td></tr>
+        <tr><td><code>tail</code></td><td>Índice del próximo byte que se leerá, si no está vacío.</td></tr>
+        <tr><td><code>count</code></td><td>Cantidad de bytes pendientes, de 0 a 32 inclusive.</td></tr>
+      </tbody>
+    </table>
+    <p><code>head</code> y <code>tail</code> no son punteros: son números usados como índices del array. <code>uint8_t</code> y <code>uint16_t</code> indican enteros sin signo de 8 y 16 bits, no de 8 y 16 bytes. No se usa <code>malloc</code>.</p>
+    <p>Esto <strong>no es un string</strong>: no se reserva lugar para NUL y un byte cero es un dato válido. Pueden usarse las 32 posiciones. <code>count</code> permite distinguir dos casos en los que los índices podrían ser iguales:</p>
+    <pre><code>Después de inicializar:      head = 0, tail = 0, count = 0   → vacío
+Después de agregar 32 bytes: head = 0, tail = 0, count = 32  → lleno</code></pre>
+    <p>Por eso <code>head == tail</code> no basta para decidir si está vacío. Los helpers del header consultan la ocupación:</p>
+    <pre><code>static inline int ring_is_empty(const ring_buf_t *rb) {
+  return rb-&gt;count == 0;
+}
+
+static inline int ring_is_full(const ring_buf_t *rb) {
+  return rb-&gt;count &gt;= RING_BUF_SIZE;
+}</code></pre>
+    <p>En un buffer válido, lleno significa <code>count == 32</code>; el código usa <code>&gt;=</code>. Estas funciones devuelven una condición (verdadero o falso), mientras que <code>push</code> y <code>pop</code> devuelven un estado de éxito o error. No hay que confundir esos contratos.</p>
+  </section>
+
+  <section id="operaciones">
+    <h2>3. Inicializar, agregar y retirar</h2>
+    <pre><code>// hal_ring.c:10–17
+void ring_init(ring_buf_t *rb) {
+  for (uint16_t i = 0; i &lt; RING_BUF_SIZE; i++)
+    rb-&gt;data[i] = 0U;
+
+  rb-&gt;head = 0U;
+  rb-&gt;tail = 0U;
+  rb-&gt;count = 0U;
+}</code></pre>
+    <p><code>rb</code> apunta al buffer que se modifica. Esta implementación borra los 32 datos y reinicia los índices y la ocupación. Lo que indica que está vacío es <code>count = 0</code>, no que todos los datos sean cero.</p>
+    <h3>Push: encolar un byte</h3>
+    <pre><code>int ring_push(ring_buf_t *rb, uint8_t byte) {
+  if (ring_is_full(rb))
+    return -1;
+
+  rb-&gt;data[rb-&gt;head] = byte;
+  rb-&gt;head = (uint16_t)((rb-&gt;head + 1U) % RING_BUF_SIZE);
+  rb-&gt;count++;
+
+  return 0;
+}</code></pre>
+    <p>Primero comprueba si hay lugar. Si está lleno, devuelve <code>-1</code> sin escribir ni cambiar los índices o <code>count</code>: <strong>no sobrescribe el dato más antiguo</strong>. Si hay lugar, escribe en <code>data[head]</code>, avanza <code>head</code>, incrementa <code>count</code> y devuelve <code>0</code> (éxito).</p>
+    <h3>Pop: desencolar un byte</h3>
+    <pre><code>int ring_pop(ring_buf_t *rb, uint8_t *byte) {
+  if (ring_is_empty(rb))
+    return -1;
+
+  *byte = rb-&gt;data[rb-&gt;tail];
+  rb-&gt;tail = (uint16_t)((rb-&gt;tail + 1U) % RING_BUF_SIZE);
+  rb-&gt;count--;
+
+  return 0;
+}</code></pre>
+    <p>Si está vacío, devuelve <code>-1</code> sin leer el array ni escribir en la variable de salida. Si hay datos, copia el byte de <code>data[tail]</code> al lugar indicado por el puntero, avanza <code>tail</code>, disminuye <code>count</code> y devuelve <code>0</code>.</p>
+    <pre><code>uint8_t recibido;
+int estado = ring_pop(&amp;sim_ring, &amp;recibido);
+// estado: 0 si pudo sacar un byte, -1 si estaba vacío.
+// recibido: contiene el dato nuevo solo si estado == 0.</code></pre>
+    <p>Hay dos resultados distintos: <strong>el return comunica el estado; el puntero de salida entrega el byte</strong>. <code>&amp;recibido</code> es la dirección de la variable; <code>*byte = ...</code> escribe en esa variable del llamador. Si falla, no entrega un dato nuevo: no hay que usar un valor previo o sin inicializar como si acabara de recibirse.</p>
+    <p><code>pop</code> no borra la celda del array. Retirar un dato significa que ya no cuenta como pendiente y su lugar puede reutilizarse. Los índices y <code>count</code>, no el aspecto del array, determinan qué datos siguen en la cola.</p>
+    <p class="source">Contrato del código: el buffer debe estar inicializado y conservar un estado válido. Los punteros deben ser válidos; para un <code>pop</code> exitoso, el puntero de salida debe permitir escribir un byte. Estas funciones no validan cualquier puntero ni coordinan accesos concurrentes.</p>
+  </section>
+
+  <section id="circular">
+    <h2>4. Seguir los índices en lugar de mover los datos</h2>
+    <table>
+      <caption>Traza desde un buffer vacío</caption>
+      <thead><tr><th>Operación</th><th>head</th><th>tail</th><th>count</th><th>Pendientes en orden FIFO</th></tr></thead>
+      <tbody>
+        <tr><td><code>init</code></td><td>0</td><td>0</td><td>0</td><td>Ninguno.</td></tr>
+        <tr><td><code>push('A')</code></td><td>1</td><td>0</td><td>1</td><td>A</td></tr>
+        <tr><td><code>push('B')</code></td><td>2</td><td>0</td><td>2</td><td>A, B</td></tr>
+        <tr><td><code>pop → 'A'</code></td><td>2</td><td>1</td><td>1</td><td>B</td></tr>
+        <tr><td><code>push('C')</code></td><td>3</td><td>1</td><td>2</td><td>B, C</td></tr>
+        <tr><td><code>pop → 'B'</code></td><td>3</td><td>2</td><td>1</td><td>C</td></tr>
+        <tr><td><code>pop → 'C'</code></td><td>3</td><td>3</td><td>0</td><td>Ninguno.</td></tr>
+      </tbody>
+    </table>
+    <p>Al final, A, B y C pueden seguir escritos en las primeras celdas, pero ya no están pendientes. Otro <code>pop</code> devuelve <code>-1</code>, aunque queden esos valores viejos en memoria.</p>
+    <h3>Por qué el índice 31 vuelve al 0</h3>
+    <p><code>%</code> calcula el resto de una división entera. Se aplica al siguiente índice:</p>
+    <pre><code>(30 + 1) % 32 = 31
+(31 + 1) % 32 =  0    vuelve al inicio del array
+( 0 + 1) % 32 =  1</code></pre>
+    <p>El índice no llega a usarse como 32: el resto lo devuelve al rango 0–31. Imaginá un estado válido con <code>head = 31</code>, <code>tail = 30</code>, <code>count = 1</code> y un byte X pendiente en el índice 30. Se puede llegar ahí agregando 31 bytes desde vacío y retirando 30, siendo X el último de esos 31:</p>
+    <table>
+      <caption>Una escritura y dos lecturas cerca del final</caption>
+      <thead><tr><th>Operación</th><th>Acceso al array</th><th>head</th><th>tail</th><th>count</th></tr></thead>
+      <tbody>
+        <tr><td>Estado inicial del ejemplo</td><td>X está en 30.</td><td>31</td><td>30</td><td>1</td></tr>
+        <tr><td><code>push('Y')</code></td><td>Escribe Y en 31.</td><td>0</td><td>30</td><td>2</td></tr>
+        <tr><td><code>pop → 'X'</code></td><td>Lee 30.</td><td>0</td><td>31</td><td>1</td></tr>
+        <tr><td><code>pop → 'Y'</code></td><td>Lee 31.</td><td>0</td><td>0</td><td>0</td></tr>
+      </tbody>
+    </table>
+    <p>El salto al principio no rompe el orden FIFO ni mueve los datos. Las comprobaciones de lleno y vacío, junto con <code>count</code>, impiden reutilizar un lugar todavía ocupado o leer un dato que ya no está pendiente.</p>
+  </section>
+
+  <section id="demo">
+    <h2>5. Por qué se imprime ABCDEFGHIJ</h2>
+    <pre><code>// demo_embedded.c:45–53
+ring_init(&amp;sim_ring);
+for (uint8_t i = 0U; i &lt; 10U; i++)
+  (void)ring_push(&amp;sim_ring, (uint8_t)('A' + i));
+
+print_str("ring: ");
+while (ring_pop(&amp;sim_ring, &amp;byte) == 0)
+  print_chr((char)byte);
+print_str("\n");</code></pre>
+    <p>La instancia <code>static ring_buf_t sim_ring</code> está declarada fuera de las funciones. Esta demo la reinicia explícitamente con <code>ring_init</code> antes de usarla. En el entorno ASCII del TP, sumar de 0 a 9 a <code>'A'</code> genera las letras A a J.</p>
+    <ul>
+      <li>Entran diez bytes en un buffer vacío con capacidad de 32: los diez <code>push</code> tienen éxito. Quedan <code>head = 10</code>, <code>tail = 0</code> y <code>count = 10</code>.</li>
+      <li><code>(void)ring_push(...)</code> descarta intencionalmente el estado devuelto. No significa que la función no devuelva nada. En otra situación habría que manejar la posibilidad de lleno.</li>
+      <li>El <code>while</code> llama a <code>pop</code> y solo imprime si devuelve 0. Retira A, B, C… J. Al quedar vacío, una llamada más devuelve −1 y termina el bucle sin imprimir un byte extra.</li>
+      <li>Al final quedan <code>head = 10</code>, <code>tail = 10</code> y <code>count = 0</code>. Los índices no tienen que ser cero para que esté vacío.</li>
+    </ul>
+    <pre><code>ring: ABCDEFGHIJ</code></pre>
+    <p>Es la salida esperada por la consigna y derivada del código, no una ejecución nueva. Se imprime por la consola host mediante <code>print_chr</code>; no se envían automáticamente esas letras por la UART simulada. El uso posterior del ring para una trama con CRC corresponde al hito 9.</p>
+    <h3>Una explicación oral posible</h3>
+    <blockquote><p>«El buffer tiene 32 lugares. Head indica dónde agrego, tail dónde retiro y count cuántos bytes quedan. Push y pop avanzan sus índices con resto 32 para volver al principio. Count distingue lleno de vacío aunque los índices coincidan. Pop devuelve el estado y entrega el byte mediante un puntero. Como es FIFO, las diez letras salen en el mismo orden en que entraron».</p></blockquote>
+  </section>
+
+  <section id="preguntas">
+    <h2>6. Comprobá lo que aprendiste</h2>
+    <form data-quiz>
+      <fieldset data-question>
+        <legend>P1. ¿Qué representan los campos del buffer?</legend>
+        <label><input id="q1-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> El índice head señala dónde escribir el próximo byte pendiente.</label>
+        <label><input id="q1-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> El índice tail señala dónde agregar el próximo byte recibido.</label>
+        <label><input id="q1-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> La capacidad útil reserva siempre un lugar para guardar NUL.</label>
+        <label><input id="q1-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> El contador count indica cuántos bytes siguen pendientes de lectura.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y D.</strong> <code>head</code> es el próximo índice de escritura, <code>tail</code> el de lectura y <code>count</code> la ocupación. B intercambia las funciones de los índices. C es falsa: este buffer contiene bytes, no un string; puede usar los 32 lugares y almacenar un byte cero.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P2. ¿Cómo se distinguen lleno y vacío?</legend>
+        <label><input id="q2-a" type="checkbox" data-correct="false"> <span class="option-letter">A.</span> Los índices iguales demuestran siempre que no quedan datos pendientes.</label>
+        <label><input id="q2-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> Los índices pueden coincidir tanto estando lleno como estando vacío.</label>
+        <label><input id="q2-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> La ocupación cero indica vacío y 32 indica capacidad completa.</label>
+        <label><input id="q2-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> Los bytes iguales a cero indican lugares disponibles para escribir.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: B y C.</strong> Al inicializar, ambos índices valen 0 y <code>count = 0</code>; después de 32 inserciones sin retirar, ambos vuelven a coincidir y <code>count = 32</code>. A ignora esa ambigüedad. D es falsa: un cero puede ser un byte válido; el contenido de las celdas no indica cuáles están ocupadas.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P3. ¿Qué hacen el avance circular y los controles de capacidad?</legend>
+        <label><input id="q3-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> El siguiente índice después de 30 se convierte en 31.</label>
+        <label><input id="q3-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> El siguiente índice después de 31 queda fuera del array.</label>
+        <label><input id="q3-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> Un push sobre buffer lleno falla sin sobrescribir datos pendientes.</label>
+        <label><input id="q3-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> Cada extracción desplaza los bytes restantes para rellenar posiciones anteriores.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y C.</strong> <code>(30 + 1) % 32 = 31</code> y <code>(31 + 1) % 32 = 0</code>, por lo que B es falsa. Si está lleno, <code>push</code> retorna −1 antes de modificar el buffer. D es falsa: <code>pop</code> avanza <code>tail</code> y disminuye <code>count</code>, sin mover los demás bytes.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P4. ¿Cómo entrega ring_pop su resultado?</legend>
+        <label><input id="q4-a" type="checkbox" data-correct="false"> <span class="option-letter">A.</span> El retorno contiene directamente el byte retirado del array interno.</label>
+        <label><input id="q4-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> El retorno comunica estado y el puntero entrega el dato.</label>
+        <label><input id="q4-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> Un pop fallido escribe igualmente un byte nuevo como resultado.</label>
+        <label><input id="q4-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> Un pop exitoso avanza tail y disminuye la ocupación actual.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: B y D.</strong> Un <code>pop</code> exitoso devuelve 0, copia el byte a <code>*byte</code> y actualiza <code>tail</code> y <code>count</code>. A confunde estado con dato. C es falsa: si está vacío retorna −1 antes de escribir en el parámetro de salida.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P5. ¿Por qué la demo imprime exactamente ABCDEFGHIJ?</legend>
+        <label><input id="q5-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> Las diez letras entran y salen siguiendo su orden original.</label>
+        <label><input id="q5-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> La cola invierte automáticamente las letras antes de poder imprimirlas.</label>
+        <label><input id="q5-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> Descartar el retorno garantiza que cualquier inserción tendrá éxito siempre.</label>
+        <label><input id="q5-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> El bucle imprime solamente cuando pop informa una extracción exitosa.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y D.</strong> Hay lugar para las diez letras y la cola conserva el orden FIFO. El <code>while</code> solo imprime tras <code>pop == 0</code>; cuando está vacío, termina sin imprimir datos viejos. B describe una inversión que no ocurre. C es falsa: <code>(void)</code> solo descarta el estado; no impide que otra inserción pueda fallar si el buffer está lleno.</p></div>
+      </fieldset>
+      <button type="submit">Comprobar respuestas</button>
+      <p data-quiz-summary role="status" aria-live="polite"></p>
+    </form>
+  </section>
+  <p class="source"><span class="note-title">Fuentes</span> <a href="../tps/tp3/trabajo_practico/README.md">Consigna del TP3</a>, hito 7; <a href="../tps/tp3/trabajo_practico/src/hal/hal_ring.h">hal_ring.h</a>, capacidad, estructura y contratos; <a href="../tps/tp3/trabajo_practico/src/hal/hal_ring.c">hal_ring.c</a>, líneas 10–39; <a href="../tps/tp3/trabajo_practico/src/demo/demo_embedded.c">demo_embedded.c</a>, líneas 21 y 45–53. Para los operadores de C: <a href="https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf">borrador público C11, N1570</a>, §§6.5.3.2 (dirección e indirección), 6.5.5 (resto), 6.8.5 (bucles) y 6.8.6.4 (return).</p>
+  <nav class="lesson-nav" aria-label="Navegación de la lección">
+    <a href="../index.html">Índice de lecciones</a>
+    <a href="0007-hitos-8-9-timer-y-trama.html">Siguiente lección</a>
+    <a href="0005-hito-6-uart-simulada.html">Lección anterior</a>
+    <a href="#utilidad">Volver al inicio</a>
+    <a href="#preguntas">Ir al cuestionario</a>
+  </nav>
+</main>
+</body>
+</html>

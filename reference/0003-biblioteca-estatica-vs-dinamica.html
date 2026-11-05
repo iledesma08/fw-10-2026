@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Referencia 0003: Biblioteca estática (.a) frente a dinámica (.so / .dll)</title>
+  <link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main>
+  <p class="kicker">Preparación TP3 · Referencia 0003</p>
+  <h1>Bibliotecas en C: estáticas (.a) vs. dinámicas (.so)</h1>
+
+  <p class="lead">Comparación técnica de mecanismos, tiempos de resolución (build time vs. runtime), consumo de memoria, comandos del toolchain (<code>ar</code>, <code>gcc -shared</code>, <code>ldd</code>) y su impacto en sistemas embebidos frente a sistemas operativos de propósito general.</p>
+
+  <nav aria-label="Secciones de la referencia">
+    <p><strong>En esta hoja:</strong>
+      <a href="#concepto">Concepto esencial</a> ·
+      <a href="#mecanismo">Mecanismo de funcionamiento</a> ·
+      <a href="#tabla-comparativa">Tabla comparativa</a> ·
+      <a href="#comandos">Comandos y generación</a> ·
+      <a href="#embebidos">Criterio en sistemas embebidos</a> ·
+      <a href="#contexto-tp3">Caso concreto del TP3</a>
+    </p>
+  </nav>
+
+  <section id="concepto">
+    <h2>1. Concepto esencial: ¿cuándo y cómo se unen al ejecutable?</h2>
+    <p>Una biblioteca es una colección de código precompilado (funciones, estructuras, datos) pensada para ser reutilizada por múltiples programas o módulos sin tener que recompilar sus archivos fuente (<code>.c</code>) cada vez.</p>
+    <p>La diferencia fundamental entre una biblioteca <strong>estática</strong> y una <strong>dinámica</strong> radica en <strong>en qué momento</strong> y <strong>de qué manera</strong> el código de la biblioteca se conecta con el programa consumidor:</p>
+    <ul>
+      <li><strong>Biblioteca estática (<code>.a</code> en Linux, <code>.lib</code> en Windows):</strong> se vincula durante el <strong>tiempo de compilación/enlace (build time)</strong>. El linker (<code>ld</code>) copia físicamente las funciones requeridas directamente dentro del archivo binario ejecutable final.</li>
+      <li><strong>Biblioteca dinámica o compartida (<code>.so</code> en Linux, <code>.dll</code> en Windows):</strong> se vincula en dos etapas. En build time solo se verifica que los símbolos existan y se anota su nombre en el ejecutable; la resolución real y la carga del código en memoria ocurren en <strong>tiempo de ejecución (runtime)</strong> mediante el cargador dinámico del sistema operativo (<code>ld.so</code>).</li>
+    </ul>
+  </section>
+
+  <section id="mecanismo">
+    <h2>2. Mecanismo de funcionamiento</h2>
+
+    <h3>Biblioteca estática (Static Archive)</h3>
+    <pre><code>Tiempo de compilación:
+ [ main.o ] + [ libutils.a (mathlib.o, strutils.o...) ]
+                     │
+              (Linker / ld)
+                     │  Copia el código de los miembros necesarios
+                     ▼
+             [ ejecutable final ] (Autónomo: contiene el código de la biblioteca)</code></pre>
+    <p>Un archivo <code>.a</code> (archive) es simplemente un empaquetado (como un archivo comprimido <code>tar</code> o <code>zip</code>, pero sin compresión obligatoria) creado con la herramienta <code>ar</code>. Contiene adentro una colección de archivos objeto relocalizables (<code>.o</code>) acompañados de una tabla de símbolos o índice.</p>
+    <p>Cuando el linker procesa <code>-lutils</code>:</p>
+    <ol>
+      <li>Revisa qué referencias no resueltas (símbolos <code>U</code>) tiene pendientes en los objetos previos.</li>
+      <li>Examina el índice de <code>libutils.a</code> para ver qué miembros (<code>.o</code>) definen esos símbolos.</li>
+      <li>Extrae del archivo solo los miembros <code>.o</code> que aportan símbolos necesarios y los incorpora al ejecutable. Si se combina con <code>-ffunction-sections</code> y <code>-Wl,--gc-sections</code>, el linker puede descartar además funciones individuales no alcanzadas.</li>
+      <li>Una vez generado el ejecutable, <strong>la biblioteca <code>.a</code> ya no se necesita</strong> para ejecutar el programa.</li>
+    </ol>
+
+    <h3>Biblioteca dinámica o compartida (Shared Object)</h3>
+    <pre><code>Tiempo de compilación:
+ [ main.o ] + [ libutils.so ]
+                     │
+              (Linker / ld)
+                     │  Verifica símbolos y anota dependencias (DT_NEEDED)
+                     ▼
+             [ ejecutable final ] (Contiene solo referencias al nombre 'libutils.so')
+
+Tiempo de ejecución (Runtime):
+ Al ejecutar ./programa:
+    1. El OS invoca al cargador dinámico (ld-linux.so).
+    2. ld.so busca 'libutils.so' en el disco (/lib, /usr/lib, LD_LIBRARY_PATH).
+    3. Carga el código de libutils.so en memoria RAM (compartido entre procesos).
+    4. Resuelve las direcciones de memoria de las funciones invocadas.</code></pre>
+    <p>El ejecutable resultante es más liviano porque <strong>no contiene el código máquina</strong> de la biblioteca. Sin embargo, para ejecutarse depende estrictamente de que el archivo <code>.so</code> exista en el sistema operativo en una ruta donde el cargador dinámico pueda encontrarlo.</p>
+  </section>
+
+  <section id="tabla-comparativa">
+    <h2>3. Tabla comparativa detallada</h2>
+    <table>
+      <caption>Diferencias clave entre bibliotecas estáticas y dinámicas</caption>
+      <thead>
+        <tr>
+          <th>Criterio</th>
+          <th>Biblioteca estática (<code>.a</code>)</th>
+          <th>Biblioteca dinámica (<code>.so</code> / <code>.dll</code>)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Momento de enlace</strong></td>
+          <td>Build time (al momento de linkear con <code>gcc</code> / <code>ld</code>).</td>
+          <td>Runtime (al momento de cargar y ejecutar el binario).</td>
+        </tr>
+        <tr>
+          <td><strong>Herramienta de empaquetado</strong></td>
+          <td><code>ar rcs libnombre.a objeto1.o objeto2.o</code></td>
+          <td><code>gcc -shared -fPIC -o libnombre.so objeto1.o...</code></td>
+        </tr>
+        <tr>
+          <td><strong>Tamaño del ejecutable</strong></td>
+          <td><strong>Mayor:</strong> el código de las funciones usadas se copia físicamente adentro del binario.</td>
+          <td><strong>Menor:</strong> solo almacena referencias y metadatos sobre qué biblioteca externa necesita.</td>
+        </tr>
+        <tr>
+          <td><strong>Consumo de memoria RAM</strong></td>
+          <td>Si 10 programas usan la misma biblioteca estática, el código se duplica 10 veces en RAM.</td>
+          <td><strong>Eficiente:</strong> el código de solo lectura (<code>.text</code>) se carga una vez en RAM física y se comparte entre múltiples procesos.</td>
+        </tr>
+        <tr>
+          <td><strong>Independencia / Portabilidad</strong></td>
+          <td><strong>Alta:</strong> el ejecutable no falla por bibliotecas faltantes o versiones incompatibles en la máquina destino.</td>
+          <td><strong>Dependiente:</strong> requiere que el host tenga instalada la versión exacta o compatible de la biblioteca (evita o sufre el "dependency hell").</td>
+        </tr>
+        <tr>
+          <td><strong>Actualizaciones y parches</strong></td>
+          <td>Si se corrige un bug en la biblioteca, es <strong>obligatorio volver a linkear</strong> todos los ejecutables.</td>
+          <td>Basta con reemplazar el archivo <code>.so</code> en el sistema; todos los programas se benefician sin recompilarse.</td>
+        </tr>
+        <tr>
+          <td><strong>Código independiente de posición (PIC)</strong></td>
+          <td>No suele requerir <code>-fPIC</code> (se reubica en direcciones fijas durante el enlace).</td>
+          <td><strong>Obligatorio:</strong> debe compilarse con <code>-fPIC</code> (Position Independent Code) para poder cargarse en cualquier dirección de memoria virtual.</td>
+        </tr>
+        <tr>
+          <td><strong>Tiempo de arranque</strong></td>
+          <td><strong>Instantáneo:</strong> no hay resolución de símbolos ni carga diferida al iniciar el proceso.</td>
+          <td>Leve sobrecarga inicial: el sistema operativo debe localizar los archivos <code>.so</code> y reubicar símbolos antes de dar control al <code>main</code>.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="comandos">
+    <h2>4. Comandos del Toolchain para crear e inspeccionar</h2>
+
+    <h3>Creación</h3>
+    <pre><code># 1. Crear biblioteca estática:
+$ gcc -c modulo1.c modulo2.c               # Genera modulo1.o modulo2.o
+$ ar rcs libmiutil.a modulo1.o modulo2.o   # Empaqueta e indexa en .a
+
+# 2. Crear biblioteca dinámica:
+$ gcc -fPIC -c modulo1.c modulo2.c         # Compila con código independiente de posición
+$ gcc -shared -o libmiutil.so modulo1.o modulo2.o  # Enlaza como objeto compartido</code></pre>
+
+    <h3>Inspección</h3>
+    <p>Para ver qué miembros u objetos tiene una biblioteca estática:</p>
+    <pre><code>$ ar t libutils.a                         # Lista los miembros (.o) contenidos
+$ nm -A --defined-only libutils.a         # Muestra símbolos definidos indicando miembro</code></pre>
+
+    <p>Para inspeccionar qué bibliotecas dinámicas necesita un ejecutable en Linux:</p>
+    <pre><code>$ ldd build/building_process_demo</code></pre>
+    <p>Ejemplo de salida de <code>ldd</code>:</p>
+    <pre><code>linux-vdso.so.1 (0x00007ffd...)
+libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f34...)
+/lib64/ld-linux-x86-64.so.2 (0x00007f34...)</code></pre>
+    <p>El comando <code>ldd</code> consulta la sección dinámica del binario (<code>.dynamic</code>) e imprime la ruta resuelta para cada dependencia compartida.</p>
+  </section>
+
+  <section id="embebidos">
+    <h2>5. Criterio de elección en sistemas embebidos (Bare-metal y RTOS)</h2>
+    <p>En el desarrollo de firmware para microcontroladores (como Cortex-M, AVR, PIC, RISC-V), <strong>casi universalmente se utilizan bibliotecas estáticas (<code>.a</code>)</strong> y se descartan las dinámicas por razones arquitectónicas concretas:</p>
+    <ol>
+      <li><strong>Ausencia de Sistema Operativo y Cargador Dinámico:</strong>
+        En sistemas <em>bare-metal</em> no existe un kernel de Linux ni un programa <code>ld.so</code> que pueda interpretar el formato ELF en tiempo de ejecución, leer un sistema de archivos y mapear páginas en memoria.
+      </li>
+      <li><strong>Falta de MMU (Memory Management Unit):</strong>
+        Las bibliotecas dinámicas requieren memoria virtual y MMU para proyectar el mismo segmento de código <code>.text</code> en los diferentes espacios de direcciones de múltiples procesos. Los microcontroladores suelen tener solo MPU (Memory Protection Unit) o memoria física plana compartida.
+      </li>
+      <li><strong>Determinismo y Fiabilidad:</strong>
+        En firmware de tiempo real no se puede tolerar la latencia variable de resolver símbolos en runtime o el riesgo de que el dispositivo no arranque por una falla al cargar una biblioteca externa.
+      </li>
+      <li><strong>Optimización y Descarte de Código Muerto (LTO y Dead Code Elimination):</strong>
+        Al enlazar estáticamente con <code>-ffunction-sections -fdata-sections</code> y <code>-Wl,--gc-sections</code>, el linker elimina toda función de la biblioteca estática que la aplicación no llame jamás, ahorrando valiosa memoria Flash (ROM). Con bibliotecas dinámicas, el <code>.so</code> completo debe residir en el sistema.
+      </li>
+    </ol>
+    <p><em>¿Cuándo se usan bibliotecas dinámicas en embebidos?</em> Únicamente en plataformas de gama alta con sistemas tipo <strong>Embedded Linux</strong> (por ejemplo routers, gateways o dispositivos con Raspberry Pi, BeagleBone, NXP i.MX), donde hay un procesador con MMU, gigabytes de almacenamiento y múltiples aplicaciones concurrentes compartiendo servicios.</p>
+  </section>
+
+  <section id="contexto-tp3">
+    <h2>6. El caso concreto de este TP3</h2>
+    <p>En el hito 11 del TP se construye <code>build/libutils.a</code>. Es fundamental entender dos precisiones técnicas habituales en las preguntas de defensa:</p>
+    <ol>
+      <li>
+        <strong>Enlazar una biblioteca estática propia no hace que el ejecutable sea 100% estático:</strong><br>
+        Aunque <code>libutils.a</code> se enlaza de forma estática (incorporando <code>mathlib.o</code>, <code>strutils.o</code>, etc., al ejecutable), el binario final sigue siendo un ejecutable dinámico en el host Linux porque utiliza funciones del sistema operativo provistas por la biblioteca estándar de C compartida (<code>libc.so</code>, por ejemplo <code>__stack_chk_fail</code> o <code>__ctype_b_loc</code>). Para hacer un ejecutable totalmente estático que no dependa de ningún <code>.so</code> se requeriría el flag <code>-static</code> de GCC.
+      </li>
+      <li>
+        <strong>El orden de enlace con bibliotecas estáticas es estricto:</strong><br>
+        En GCC, el linker recorre los archivos en la línea de comando de izquierda a derecha. Por eso en el <code>Makefile</code> los objetos consumidores (<code>APP_OBJS</code>) se ubican <strong>antes</strong> de <code>-Lbuild -lutils</code>. Si se colocara <code>-lutils</code> antes de los objetos que lo necesitan, el linker no vería referencias pendientes en ese momento y descartaría los miembros de la biblioteca, provocando errores de <em>undefined reference</em> posteriores.
+      </li>
+    </ol>
+  </section>
+
+  <nav class="lesson-nav" aria-label="Navegación entre lecciones">
+    <a href="../index.html">Índice general</a>
+    <a href="0001-compilacion-enlace-y-simbolos.html">Referencia 0001: Compilación y enlace</a>
+    <a href="0002-secciones-de-memoria-y-layout.html">Referencia 0002: Layout de memoria</a>
+    <a href="../lessons/0009-hito-11-biblioteca-estatica.html">Lección 0009: Hito 11 (Biblioteca estática)</a>
+  </nav>
+</main>
+</body>
+</html>

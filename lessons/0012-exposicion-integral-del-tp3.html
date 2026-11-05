@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TP3: exposición integral, código y comandos</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+</head>
+<body>
+<main>
+  <p class="kicker">Preparación TP3 · Lección 0012 · Cierre</p>
+  <h1>Exponer el TP3 de principio a fin</h1>
+  <p class="lead">Esta guía conecta lo que tendrías que decir, mostrar en el código y escribir en la terminal. La meta es manejar comandos pequeños, saber armar un Makefile que automatice la construcción del proyecto y justificar cómo funcionan los módulos y qué demuestra cada herramienta. No memorizar listas largas de objetos.</p>
+
+  <section id="apertura">
+    <h2>1. Abrir con el objetivo y el mapa del programa</h2>
+    <blockquote><p>«Este TP trabaja el proceso de construcción de un programa en C y su organización modular. Implementamos utilidades y periféricos simulados, los probamos con demos, agrupamos parte del código en una biblioteca estática y analizamos símbolos y tamaños. La UART y el timer son modelos de software, no hardware funcionando en tiempo real».</p></blockquote>
+    <pre><code>main → demo_math       → mathlib
+     → demo_str        → strutils
+     → demo_embedded   → UART, ring, CRC y timer
+
+Impresión: print_str/print_dec/print_hex → print_chr del host
+Construcción final: app + demos + plataforma + libutils.a</code></pre>
+    <p>Mostrá dónde vive cada responsabilidad: <code>src/app</code> coordina, <code>src/demo</code> prueba, <code>src/lib</code> reúne utilidades, <code>src/hal</code> modela periféricos y <code>src/platform</code> adapta la salida al host. La biblioteca contiene lib y HAL; los objetos de impresión se linkean aparte.</p>
+    <p>Separá historia y estado final: el hito 1 pedía <code>Hello, World!</code>; el <code>main</code> actual ya llama las tres demos o atiende <code>--version</code>. No presentes el archivo final como si todavía fuera el programa mínimo del primer hito.</p>
+  </section>
+
+  <section id="codigo">
+    <h2>2. Recorrer el código con entradas concretas</h2>
+    <p>Por módulo, explicá <strong>entrada → estado o algoritmo → salida → límite</strong>. Elegí una traza, no leas todas las líneas en voz alta. El siguiente mapa cubre los hitos sin duplicar sus desarrollos completos.</p>
+    <table>
+      <caption>Qué decir y qué deberías poder reconstruir</caption>
+      <thead><tr><th>Hito</th><th>Idea para la exposición</th><th>Demostración corta en el código</th></tr></thead>
+      <tbody>
+        <tr><td>1 · Construcción</td><td>Los headers declaran interfaces; los objetos aportan definiciones y referencias. El enlace las conecta.</td><td><code>print_str</code> es U en su consumidor y T en <code>print.o</code>; este usa <code>print_chr</code> del backend.</td></tr>
+        <tr><td>2–3 · Matemática</td><td>Factorial acumula productos; GCD usa Euclides; raíz usa Newton entero; primalidad descarta divisores.</td><td><code>5! = 120</code>; GCD <code>(48,18)→(18,12)→(12,6)→(6,0)</code>; raíz de 17 da 4. <code>6k±1</code> elige candidatos, no garantiza primos.</td></tr>
+        <tr><td>4 · Strings</td><td>Un array de 128 bytes reserva un lugar para NUL; <code>len</code> no cuenta el terminador.</td><td><code>set("value=")</code> deja len=6; agregar 42 deja len=8 y devuelve 2. <code>cstr</code> devuelve el mismo array, no una copia.</td></tr>
+        <tr><td>5 · Trim y CRC</td><td>Trim quita blancos exteriores; el CRC ayuda a detectar alteraciones, no autentica.</td><td><code>"  hello  "→"hello"</code>; con capacidad 4 copia <code>"hel"</code> y devuelve 3. CRC del payload <code>01 02 03 04</code>, inicio FF y polinomio 07, da <code>0x32</code>.</td></tr>
+        <tr><td>6 · UART</td><td>Se configuran registros en memoria. Velocidad pedida y divisor son conceptos distintos.</td><td><code>16000000 / 115200 = 138</code> entero en BRR; CR1 enciende 13/3/2. Enviar O y K deja DR=<code>0x4B</code> y SR=<code>0x40</code>.</td></tr>
+        <tr><td>7 · Ring</td><td>FIFO de 32 bytes; head escribe, tail lee, count cuenta pendientes. No requiere NUL.</td><td>Retirar A de [A,B] cambia tail y count sin mover B. <code>(31+1)%32=0</code>; head==tail puede significar lleno o vacío.</td></tr>
+        <tr><td>8–9 · Timer y trama</td><td>El contador avanza por llamadas; el ring transporta una trama local de seis bytes.</td><td>Tres ticks tras init dan 3, no una espera de 3 ms. Trama <code>AA 01 02 03 04 32</code>; CRC desde índice 1 con longitud 4, después comparar con índice 5.</td></tr>
+        <tr><td>10 · Organización</td><td>Main coordina demos; no compila ni linkea durante la ejecución.</td><td>Ubicar las tres llamadas y los prototipos de <code>demo.h</code>.</td></tr>
+        <tr><td>11 · Biblioteca</td><td>Cinco objetos se archivan; el enlace consulta definiciones según referencias pendientes.</td><td><code>math_factorial</code> pertenece a <code>mathlib.o</code>, miembro de <code>libutils.a</code>.</td></tr>
+        <tr><td>12 · Optimización</td><td>Comparar tamaños no basta para probar cada causa; código más rápido no siempre es más chico.</td><td>Contrastar tabla de size, tamaños de símbolos y reportes; distinguir archive normal de objetos directos en opt.</td></tr>
+        <tr><td>13 · Versión</td><td>La rama especial termina antes de las demos.</td><td><code>argc &gt; 1 &amp;&amp; strcmp(argv[1], "--version") == 0</code>; <code>return 0</code>. Las cadenas son arrays static const, no macros -D.</td></tr>
+        <tr><td>14 · Evidencia</td><td>Elegir la herramienta según la pregunta y limitar la conclusión.</td><td>Separar símbolo, miembro, sección, categoría de size y archivo físico.</td></tr>
+      </tbody>
+    </table>
+    <h3>Las conexiones que no conviene perder</h3>
+    <ul>
+      <li><code>int32_t</code> y <code>uint32_t</code> son de 32 <strong>bits</strong>; el primero tiene signo. No prometas corrección para todos los extremos de las funciones matemáticas.</li>
+      <li><code>bit_set(reg, bit)</code> devuelve <code>reg | (1U &lt;&lt; bit)</code>: el OR conserva los otros bits. Hay que asignar el retorno; repetirlo no alterna ni suma la máscara.</li>
+      <li>Cada dispositivo UART real puede partir de un clock distinto y configurar su propio divisor para velocidades compatibles. El TP solo guarda BRR: no genera señales ni sincroniza dos dispositivos.</li>
+      <li><code>volatile</code> hace relevantes los accesos; no crea hardware, atomicidad ni sincronización. Una variable global estática persiste, pero <code>static</code> a nivel archivo limita el enlace del nombre.</li>
+      <li><code>ring_pop</code> devuelve estado (0/−1) y entrega el byte por puntero. La validación de trama revisa los retornos, el sincronismo y el CRC; no es un receptor genérico ni una prueba de autenticidad.</li>
+    </ul>
+  </section>
+
+  <section id="construccion">
+    <h2>3. Explicar y escribir la construcción</h2>
+    <blockquote><p>«GCC puede coordinar preprocesamiento, compilación, ensamblado y enlace. Con -c lo detengo en un objeto relocalizable; todavía puede tener símbolos U. Ar agrupa objetos sin resolverlos todos. En el enlace final, GCC invoca al linker y agrega los componentes habituales del entorno».</p></blockquote>
+    <p><code>ld</code> es el linker; normalmente lo invocamos mediante <code>gcc</code>, que facilita archivos de arranque y bibliotecas del sistema. Un header no reemplaza al objeto que contiene una definición. La excepción de <code>bit_set</code>, con cuerpo <code>static inline</code> en el header, no cambia dónde están los cuerpos de las cuatro funciones matemáticas.</p>
+    <h3>Qué escribir a mano y qué dejar en Make</h3>
+    <p><strong>Para una consulta o prueba puntual, escribís comandos pequeños. Para construir el proyecto completo, usás Make y entendés sus reglas.</strong> Saber qué hace una línea larga de enlace es útil; memorizar o volver a escribir su lista de objetos no es el objetivo.</p>
+    <p>Desde <code>tps/tp3/trabajo_practico/</code>, estos ejemplos pequeños permiten practicar las herramientas sin sobrescribir <code>build/</code>. Son ejemplos para escribir y explicar, no comandos ejecutados para esta lección:</p>
+    <pre><code>$ mkdir -p /tmp/tp3-exposicion
+$ gcc -Isrc/lib -c src/lib/mathlib.c -o /tmp/tp3-exposicion/mathlib.o
+$ ar rcs /tmp/tp3-exposicion/libmatematica.a /tmp/tp3-exposicion/mathlib.o
+$ ar t /tmp/tp3-exposicion/libmatematica.a</code></pre>
+    <p><code>-c</code> produce un objeto sin linkear y <code>-o</code> elige su ruta. <code>-I</code> busca headers, no bibliotecas. En <code>ar rcs</code>, r inserta/reemplaza miembros, c evita el aviso de creación y s genera el índice. Esta biblioteca de ejercicio contiene solo mathlib.o: no es la biblioteca completa de cinco miembros del TP.</p>
+    <p>Las rutas importan: <code>strutils.o</code> en el directorio actual y <code>build/lib/strutils.o</code> no son la misma ruta. Make centraliza también esas decisiones para no escribirlas de nuevo en cada construcción.</p>
+    <h3 id="armar-makefile">Cómo armar un Makefile: empezar por un objetivo pequeño</h3>
+    <p>Primero definí <strong>qué archivo querés producir, de qué archivos depende y qué comando lo crea</strong>. Después poné en variables las herramientas, flags y rutas que se repiten. Este Makefile didáctico completo construye una biblioteca de un solo miembro; no reemplaza al Makefile del TP:</p>
+    <pre><code>CC = gcc
+AR = ar
+CFLAGS = -Wall -Wextra -Werror -std=c11 -g -O0
+BUILD_DIR = /tmp/tp3-make-estudio
+SRC = src/lib/mathlib.c
+OBJ = $(BUILD_DIR)/mathlib.o
+LIB = $(BUILD_DIR)/libmatematica.a
+
+.PHONY: all
+all: $(LIB)
+
+$(BUILD_DIR):
+	mkdir -p $@
+
+$(OBJ): $(SRC) src/lib/mathlib.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -Isrc/lib -c $&lt; -o $@
+
+$(LIB): $(OBJ)
+	$(AR) rcs $@ $^</code></pre>
+    <p>Las líneas de receta comienzan con <strong>una tabulación real</strong>. Si guardaras este bloque como <code>/tmp/Makefile.tp3-estudio</code>, podrías pedir la construcción desde el directorio del TP con <code>make -f /tmp/Makefile.tp3-estudio</code>. <code>-f</code> elige qué Makefile leer; no cambia el directorio donde se interpretan las rutas de los fuentes. No hace falta guardar ni ejecutar este ejemplo para poder explicarlo.</p>
+    <ol>
+      <li><code>all</code> es el primer objetivo y pide la biblioteca. Se declara <code>.PHONY</code> porque no representa un archivo llamado all; eso no obliga a recompilar sus dependencias si siguen actualizadas.</li>
+      <li>La biblioteca depende del objeto y el objeto depende del fuente y su header. Make recorre esas dependencias antes de ejecutar las recetas necesarias.</li>
+      <li>En la compilación, <code>$&lt;</code> es el primer requisito (el .c) y <code>$@</code> el objeto. En el archive, <code>$@</code> es la biblioteca y <code>$^</code> reúne los objetos requeridos.</li>
+      <li><code>| $(BUILD_DIR)</code> asegura que exista el directorio sin reconstruir el objeto solo por cambiar la fecha de ese directorio. No es un pipe de shell.</li>
+      <li>Si nada quedó desactualizado, las recetas de esos archivos se omiten. Este ejemplo sí declara mathlib.h explícitamente; la regla genérica del TP no registra sus headers y tiene la limitación explicada en la lección 0009.</li>
+    </ol>
+    <p><code>-Wall</code> y <code>-Wextra</code> habilitan advertencias seleccionadas y <code>-Werror</code> las trata como errores; no prueban que la lógica sea correcta. <code>-std=c11</code> elige el dialecto, <code>-g</code> agrega depuración y <code>-O0</code> es el nivel normal del TP. Esas opciones se escriben una vez en la variable, no manualmente para cada archivo.</p>
+    <h3>Escalar al proyecto: listas, reglas patrón y receta de enlace</h3>
+    <p>En el TP real hay varios fuentes: se agrupan en <code>SRCS</code>, <code>LIB_SRCS</code> y <code>PLATFORM_SRCS</code>. Las listas de objetos se derivan con sustituciones como:</p>
+    <pre><code>LIB_OBJS = $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(LIB_SRCS))</code></pre>
+    <p>Con BUILD_DIR=build, <code>src/lib/mathlib.c</code> se convierte en <code>build/lib/mathlib.o</code>. Una regla patrón como <code>build/%.o: src/%.c</code> evita escribir una receta de compilación distinta para cada fuente. Los grupos y reglas completos están en la <a href="0009-hito-11-biblioteca-estatica.html#listas">lección 0009</a>.</p>
+    <p>La construcción larga se expresa en el Makefile mediante esos nombres, no repitiendo la lista a mano en la terminal. Este es el esquema de la receta normal, con las variables del Makefile real ya definidas:</p>
+    <pre><code>$(TARGET): $(APP_OBJS) $(PLATFORM_OBJS) $(STATIC_LIB) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) \
+	  $(APP_OBJS) $(PLATFORM_OBJS) -L$(BUILD_DIR) -lutils -o $@</code></pre>
+    <p>Los requisitos indican qué debe estar actualizado antes de linkear. En la receta, los objetos consumidores van antes de la biblioteca: <code>-L</code> agrega el directorio de búsqueda y <code>-lutils</code> pide la biblioteca por nombre lógico. <code>-o $@</code> nombra el ejecutable objetivo. No se usa <code>-c</code> porque esta etapa linkea.</p>
+    <p>Make expande las variables y ejecuta la línea larga por vos. <strong>Debés poder armar y explicar esa regla, no memorizar su expansión completa.</strong> No reemplaza a GCC ni a ar: organiza cuándo y con qué argumentos ejecutarlos. El <code>\</code> continúa una misma orden del shell en la línea siguiente.</p>
+    <p><code>LDFLAGS</code> contiene aquí <code>-Wl,--gc-sections</code>: <code>-Wl,</code> pasa la opción al linker. Las flags de compilación separan funciones/datos en secciones para permitir ese descarte. Extraer un miembro del archive y descartar secciones son decisiones diferentes; usar una .a no vuelve necesariamente estático todo el ejecutable.</p>
+    <h3>Qué pedirle a Make desde la terminal</h3>
+    <pre><code>$ make                 # Construcción normal, si hace falta actualizarla.
+$ make opt             # Construcción optimizada, si hace falta actualizarla.
+$ make -n              # Previsualiza las recetas pendientes en este TP.
+$ make -B              # Fuerza la construcción normal necesaria.
+$ make clean &amp;&amp; make   # Borra build/ y luego reconstruye el normal.
+$ make verify          # Limpia, construye y ejecuta comprobaciones del TP.</code></pre>
+    <p><strong>Las órdenes de construcción sí pueden modificar artefactos.</strong> <code>make -n</code> permite previsualizar las recetas pendientes sin ejecutarlas en estos ejemplos, que no tienen invocaciones recursivas especiales. Desde cero, <code>make</code> construye los objetos, archive y programa requeridos por sus reglas. Después reutiliza objetivos actualizados según fechas y dependencias. En el Makefile actual, cambiar solo headers o flags puede no recompilar objetos porque no se registran esas dependencias. <code>make -B</code> no pide automáticamente opt; <code>clean</code> también borra un opt existente. <code>&amp;&amp;</code> ejecuta el segundo comando solo si el primero tuvo éxito.</p>
+  </section>
+
+  <section id="inspeccion">
+    <h2>4. Elegir una herramienta por la pregunta</h2>
+    <p>Todos estos comandos inspeccionan archivos existentes, sin recompilar ni ejecutar el programa. Si falta el archivo, no inventes la salida ni mezcles objetos normales y optimizados como si fueran la misma construcción.</p>
+    <table>
+      <caption>Comandos que deberías poder escribir y explicar</caption>
+      <thead><tr><th>Pregunta</th><th>Comando</th><th>Conclusión y límite</th></tr></thead>
+      <tbody>
+        <tr><td>¿Qué define mathlib?</td><td><code>nm --defined-only build/lib/mathlib.o</code></td><td>T global de código; t local. No demuestra que toda definición se use.</td></tr>
+        <tr><td>¿Qué le falta a la demo?</td><td><code>nm -u build/demo/demo_embedded.o</code></td><td>Referencias U: no identifica proveedores por sí solo.</td></tr>
+        <tr><td>¿Qué objetos tiene la biblioteca?</td><td><code>ar t build/libutils.a</code></td><td>Miembros, no funciones: incluye mathlib, strutils y los tres HAL.</td></tr>
+        <tr><td>¿Quién aporta factorial?</td><td><code>nm -A --defined-only build/libutils.a | grep ' math_factorial$'</code></td><td>Relaciona archivo, miembro y definición; aquí mathlib.o.</td></tr>
+        <tr><td>¿Cuánto ocupan los símbolos?</td><td><code>nm -S --size-sort build/building_process_demo</code></td><td>Valor, tamaño, tipo y nombre. Tamaños hexadecimales por defecto; no todo el archivo.</td></tr>
+        <tr><td>¿Cómo se comparan las categorías?</td><td><code>size build/building_process_demo build/building_process_demo_opt</code></td><td>text/data/bss agregados; requiere ambos ejecutables.</td></tr>
+        <tr><td>¿Qué secciones y atributos hay?</td><td><code>size -A build/building_process_demo</code><br><code>readelf -SW build/building_process_demo</code></td><td>Secciones individuales y bandera A de asignación a memoria.</td></tr>
+        <tr><td>¿Secciones o instrucciones?</td><td><code>objdump -h build/building_process_demo</code><br><code>objdump -d build/building_process_demo</code></td><td>h muestra cabeceras de secciones; d desensambla código, no fuente C.</td></tr>
+        <tr><td>¿Está guardado el nombre?</td><td><code>strings -a build/building_process_demo | grep building-process</code></td><td>Busca texto en todo el archivo; no verifica la ejecución de --version.</td></tr>
+      </tbody>
+    </table>
+    <p>En un pipe, <code>|</code> entrega la salida al siguiente comando. <code>grep</code> filtra líneas; el <code>$</code> de <code>' math_factorial$'</code> exige ese nombre al final. Si ves <code>grep -E ' T (ring_init|ring_push|ring_pop)$'</code>, <code>-E</code> habilita expresiones extendidas, los paréntesis agrupan y el <code>|</code> dentro de las comillas elige alternativas: no es otro pipe del shell.</p>
+    <p>Para observar comportamiento, en cambio, se ejecuta el programa:</p>
+    <pre><code>$ ./build/building_process_demo
+$ ./build/building_process_demo --version</code></pre>
+    <p>La primera invocación recorre las demos. La segunda debe imprimir <code>building-process v1.0.0</code> y terminar antes de ellas. El código compara <strong>contenido</strong> con <code>strcmp == 0</code>; <code>argv[1] == "--version"</code> compararía punteros. Sin argumento, <code>argc &gt; 1</code> es falso y el cortocircuito evita pasar el puntero nulo final a <code>strcmp</code>.</p>
+  </section>
+
+  <section id="informe">
+    <h2>5. Defender resultados sin atribuirles más de lo que prueban</h2>
+    <blockquote><p>«El informe declara text/data/bss de 7200/616/112 para el normal y 5903/616/104 para opt. Text baja 1297 bytes, aproximadamente 18 %, y el total baja 1305, aproximadamente 16,5 %. Eso no implica que cada función se achique ni que ese total sea el tamaño del archivo».</p></blockquote>
+    <p>El normal coincide con inspecciones previas de sus artefactos existentes. El opt no se reconstruyó para estas lecciones: sus cifras siguen atribuidas al informe. Estas medidas dependen del entorno; no son propiedades universales del código C.</p>
+    <ul>
+      <li><strong>Flags:</strong> normal usa <code>-O0 -g</code>, opt <code>-O2 -DNDEBUG</code>. <code>-g</code> aporta depuración y <code>NDEBUG</code> afecta assert, no toda validación propia. Además cambia el enlace: archive normal frente a objetos opt directos. No digas que la única diferencia son las flags.</li>
+      <li><strong>Memoria:</strong> text no es solo .text; data no es solo .data. bss reserva almacenamiento inicializado en cero sin guardar todos sus ceros como contenido del archivo. Pila y otros consumos no se obtienen sumando data+bss.</li>
+      <li><strong>Mayor sección:</strong> en el normal analizado, <code>.debug_info = 6215</code> supera <code>.text = 4306</code>, pero no tiene bandera A. Entre las asignadas a memoria, la mayor es .text. La columna text vale 7200 y agrupa varias secciones.</li>
+      <li><strong>Símbolos:</strong> <code>0x318 = 792</code> bytes de demo_embedded normal; una dirección no es un tamaño. B/b indican almacenamiento BSS, D/d datos inicializados escribibles; constantes pueden estar en solo lectura.</li>
+      <li><strong>Inlining:</strong> integrar un cuerpo puede ahorrar llamadas y habilitar simplificaciones, pero también duplicar código. La ausencia de un símbolo no prueba por sí sola inlining ni que el linker haya eliminado su cuerpo.</li>
+      <li><strong>RAM estática:</strong> el informe mantiene sim_uart=20, sim_ring=38 y timer_ms=4 en ambos casos. La caída total de bss de 112 a 104 no demuestra que esas variables se achiquen ni que todo el resto sea padding.</li>
+    </ul>
+    <pre><code>$ make report-inline
+$ make report-optimized</code></pre>
+    <p>Estos targets <strong>compilan</strong> casos representativos con <code>-fopt-info-inline</code> y <code>-fopt-info-optimized</code>, y escriben objetos en <code>/tmp/tp3-reports</code>. No se ejecutaron de nuevo para esta guía. Los reportes documentados muestran inlining y transformaciones de bucles; son evidencia localizada, no una explicación cuantitativa completa del ahorro ni una medición de velocidad.</p>
+    <p>Por último, una U puede ser válida incluso en el ejecutable si se resuelve dinámicamente. <code>__stack_chk_fail@GLIBC_2.4</code> del informe no es una función escrita en la demo ni prueba una falla de enlace; la versión del símbolo no identifica exactamente la libc instalada. Los símbolos agregados por el compilador o libc pueden cambiar entre entornos.</p>
+  </section>
+
+  <section id="cierre">
+    <h2>6. Cerrar la exposición y reconocer sus límites</h2>
+    <blockquote><p>«El resultado es un programa modular que construimos mediante Make y GCC, con utilidades agrupadas en una biblioteca. Puedo seguir los algoritmos y estados de las demos, identificar consumidores y proveedores y separar ejecución de inspección. Las mediciones muestran diferencias entre construcciones, con límites de interpretación. No presento una simulación como hardware real ni el CRC como garantía absoluta».</p></blockquote>
+  </section>
+
+  <section id="preguntas">
+    <h2>7. Comprobá las conexiones</h2>
+    <form data-quiz>
+      <fieldset data-question><legend>P1. ¿Cómo se relacionan Make y las herramientas de construcción?</legend>
+        <label><input id="q1-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> Compilar con -c produce objetos que pueden conservar referencias externas.</label>
+        <label><input id="q1-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> Archivar con ar ejecuta main para resolver todas las referencias.</label>
+        <label><input id="q1-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> Las reglas de Make organizan comandos y dependencias del proyecto.</label>
+        <label><input id="q1-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> Los headers aportan siempre todos los cuerpos necesarios al enlace.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y C.</strong> GCC con -c produce un objeto que puede contener referencias U. Make no sustituye al compilador ni al archivador: organiza sus recetas y dependencias. B confunde agrupar objetos con ejecutar o linkear. D es falsa: los prototipos no aportan los cuerpos de las cuatro funciones matemáticas; la definición static inline de bit_set es otro caso.</p></div>
+      </fieldset>
+      <fieldset data-question><legend>P2. ¿Qué distingue una inspección de una construcción?</legend>
+        <label><input id="q2-a" type="checkbox" data-correct="false"> <span class="option-letter">A.</span> Ejecutar make verify solamente lista símbolos sin modificar los artefactos.</label>
+        <label><input id="q2-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> Ejecutar nm -u identifica referencias sin definir del objeto inspeccionado.</label>
+        <label><input id="q2-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> Ejecutar make -B fuerza actualizar los objetivos necesarios del solicitado.</label>
+        <label><input id="q2-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> Ejecutar strings prueba que las demos funcionan correctamente sin argumentos.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: B y C.</strong> nm inspecciona símbolos; Make con -B reconstruye lo requerido para su objetivo. A es falsa: verify limpia, construye y ejecuta comprobaciones. D confunde presencia de texto con comportamiento del programa.</p></div>
+      </fieldset>
+      <fieldset data-question><legend>P3. ¿Cómo explicar los estados de strings y periféricos?</legend>
+        <label><input id="q3-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> La longitud del texto cambia sin modificar la capacidad reservada.</label>
+        <label><input id="q3-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> La UART almacena todos los bytes enviados dentro de DR.</label>
+        <label><input id="q3-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> El timer garantiza milisegundos físicos solamente por llamar tres veces.</label>
+        <label><input id="q3-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> El ring entrega bytes siguiendo FIFO sin desplazar los pendientes.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y D.</strong> Len cuenta contenido y el ring mantiene orden mediante índices y ocupación. B es falsa: DR se sobrescribe y conserva el último byte. C atribuye una fuente de tiempo físico que la simulación no implementa.</p></div>
+      </fieldset>
+      <fieldset data-question><legend>P4. ¿Qué conexiones importan para interpretar el informe?</legend>
+        <label><input id="q4-a" type="checkbox" data-correct="false"> <span class="option-letter">A.</span> La columna text coincide necesariamente con la sección individual .text.</label>
+        <label><input id="q4-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> La depuración puede ocupar secciones no asignadas durante la ejecución.</label>
+        <label><input id="q4-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> Las recetas cambian también cómo suministran las utilidades al enlace.</label>
+        <label><input id="q4-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> La ausencia de un símbolo demuestra siempre inlining del compilador.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: B y C.</strong> La información debug no asignada debe separarse del código cargado; normal linkea archive y opt objetos directos. A confunde categoría con sección. D ignora eliminación de código u omisión del cuerpo separado y necesita evidencia adicional.</p></div>
+      </fieldset>
+      <fieldset data-question><legend>P5. ¿Qué hace defendible una exposición práctica?</legend>
+        <label><input id="q5-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> Elegir un comando requiere identificar primero qué queremos poder observar.</label>
+        <label><input id="q5-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> Memorizar listas de objetos reemplaza entender las dependencias del proyecto.</label>
+        <label><input id="q5-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> Obtener CRC coincidente demuestra autenticidad absoluta del mensaje recibido siempre.</label>
+        <label><input id="q5-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> Separar dato observado y conclusión permite reconocer límites de evidencia.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y D.</strong> Una defensa conecta pregunta, herramienta, dato y límite. B es falsa: el objetivo es escribir comandos pequeños, armar reglas de Make y entender sus dependencias, no memorizar expansiones largas. C es falsa: el CRC ayuda a detectar errores, pero admite coincidencias y no autentica.</p></div>
+      </fieldset>
+      <button type="submit">Comprobar respuestas</button>
+      <p data-quiz-summary role="status" aria-live="polite"></p>
+    </form>
+  </section>
+  <p class="source"><span class="note-title">Fuentes y trazabilidad</span> <a href="../tps/tp3/trabajo_practico/README.md">Consigna</a>, <a href="../tps/tp3/trabajo_practico/Makefile">Makefile</a>, <a href="../tps/tp3/trabajo_practico/src/app/main.c">main</a>, <a href="../tps/tp3/trabajo_practico/src/demo/demo_embedded.c">demo_embedded</a>, <a href="../tps/tp3/trabajo_practico/INFORME.md">informe</a> e <a href="../tps/tp3/trabajo_practico/INFORME_EXT.md">informe extendido</a>. El <a href="../index.html">índice</a> linkea los desarrollos de código y sus fuentes. Manuales primarios: GCC <a href="https://gcc.gnu.org/onlinedocs/gcc/Overall-Options.html">etapas</a> y <a href="https://gcc.gnu.org/onlinedocs/gcc/Link-Options.html">enlace</a>, GNU Binutils <a href="https://sourceware.org/binutils/docs/binutils/nm.html">nm</a>, <a href="https://sourceware.org/binutils/docs/binutils/ar.html">ar</a>, <a href="https://sourceware.org/binutils/docs/binutils/size.html">size</a>, GNU Make <a href="https://www.gnu.org/software/make/manual/html_node/Automatic-Variables.html">variables automáticas</a>. Cifras normales contrastadas en unidades anteriores; no se generaron nuevas mediciones de C para esta guía.</p>
+  <nav class="lesson-nav" aria-label="Navegación de la lección">
+    <a href="../index.html">Índice de lecciones</a>
+    <a href="0011-hito-14-simbolos-y-defensa.html">Lección anterior</a>
+    <a href="#preguntas">Ir al cuestionario</a>
+  </nav>
+</main>
+</body>
+</html>

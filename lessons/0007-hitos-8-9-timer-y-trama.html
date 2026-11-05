@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hitos 8 y 9: timer y trama</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+</head>
+<body>
+<main>
+  <p class="kicker">Preparación TP3 · Lección 0007</p>
+  <h1>Hitos 8 y 9: timer y trama</h1>
+  <p class="lead">Vas a poder explicar cómo el timer acumula ticks y cómo la demo arma, transporta por un buffer local y comprueba una trama de seis bytes.</p>
+  <section id="timer">
+    <h2>1. Un contador de tiempo sin reloj físico</h2>
+    <p>Una aplicación puede necesitar medir tiempo transcurrido, por ejemplo para saber cuántos milisegundos pasaron desde el inicio. Este módulo ofrece una interfaz pequeña: inicializar, avanzar un tick y consultar el contador. En este ejercicio es un contador de software; no lee un periférico ni mide el tiempo real por sí mismo. La demo imprime la salida esperada <code>timer_ms: 3</code>, derivada de tres incrementos tras inicializar.</p>
+    <pre><code>// hal_timer.c
+static uint32_t timer_ms;
+
+void timer_init(void) { timer_ms = 0U; }
+void timer_tick(void) { timer_ms++; }
+uint32_t timer_get_ms(void) { return timer_ms; }</code></pre>
+    <p><code>static</code> limita el nombre <code>timer_ms</code> a este archivo: otros módulos no lo modifican directamente. La interfaz pública está declarada en <code>hal_timer.h</code>. Inicializar pone el estado a cero; cada llamada a <code>timer_tick</code> suma uno; consultar devuelve el acumulado.</p>
+    <p>El comentario del módulo define un tick como 1 ms, pero tres llamadas no equivalen necesariamente a tres milisegundos físicos: aquí la demo invoca las funciones consecutivamente y no espera ni configura una interrupción periódica. El resultado lógico es tres ticks acumulados.</p>
+    <pre><code>timer_init();       // timer_ms = 0
+timer_tick();       // timer_ms = 1
+timer_tick();       // timer_ms = 2
+timer_tick();       // timer_ms = 3
+timer_get_ms();     // devuelve 3</code></pre>
+  </section>
+  <section id="trama">
+    <h2>2. Qué problema resuelve una trama</h2>
+    <p>Al recibir bytes, el programa necesita reconocer dónde empieza una unidad de datos y comprobar si su contenido coincide con lo esperado. Una trama fija agrupa bytes con una estructura conocida: sincronismo, datos y comprobación. <strong>Payload</strong> significa los datos útiles que la trama transporta, aquí cuatro bytes; además hay un byte de sincronismo y un byte CRC. El buffer circular sirve como almacenamiento temporal entre la inserción y la extracción de esos bytes.</p>
+    <pre><code>Índice:    0    1    2    3    4    5
+Trama:   AA   01   02   03   04   32
+         └sync┘ └── payload ──┘ └CRC┘</code></pre>
+    <p>El CRC de este payload es <code>0x32</code>, según el algoritmo del TP, que empieza en <code>STR_CRC8_INIT</code> (<code>0xFF</code>) y usa el polinomio <code>0x07</code>. CRC es una comprobación de errores, no una autenticación ni una prueba universal de que los datos estén intactos: distintos errores pueden no detectarse.</p>
+    <h3>Extracto: construir y pasar los seis bytes</h3>
+    <p>El bloque reúne declaraciones y operaciones de <code>demo_embedded.c</code> para seguir el recorrido; no es un archivo C completo independiente.</p>
+    <pre><code>#define FRAME_SIZE 6U
+static ring_buf_t sim_ring;
+uint8_t frame[FRAME_SIZE];
+uint8_t received[FRAME_SIZE] = {0U};
+
+static const uint8_t payload[] = {0x01U, 0x02U, 0x03U, 0x04U};
+frame[0] = 0xAAU;
+for (size_t i = 0; i &lt; sizeof(payload); i++)
+  frame[1U + i] = payload[i];
+crc_expected = str_crc8(payload, sizeof(payload));
+frame[FRAME_SIZE - 1U] = crc_expected;
+
+ring_init(&amp;sim_ring);
+frame_ok = 1;
+for (size_t i = 0; i &lt; FRAME_SIZE; i++) {
+  if (ring_push(&amp;sim_ring, frame[i]) != 0)
+    frame_ok = 0;
+}
+for (size_t i = 0; i &lt; FRAME_SIZE; i++) {
+  if (ring_pop(&amp;sim_ring, &amp;received[i]) != 0)
+    frame_ok = 0;
+}</code></pre>
+    <p>El <code>ring_init</code> ocurre antes de meter la trama: reinicia el estado del buffer. Los seis <code>push</code> y seis <code>pop</code> comprueban sus retornos; si cualquiera falla, <code>frame_ok</code> queda en cero. En esta demo vacía, de capacidad 32, esas operaciones deben caber. Esto describe este recorrido concreto, no valida cualquier trama, puntero o estado posible.</p>
+    <p>Importante: el ring usado aquí es memoria local del programa. Aunque la demo también simula registros UART en otra parte, este código no envía automáticamente la trama por UART ni la recibe desde un cable.</p>
+  </section>
+  <section id="traza">
+    <h2>3. Validar cabecera y CRC</h2>
+    <pre><code>if (frame_ok &amp;&amp; received[0] == 0xAAU) {
+  crc_received = str_crc8(&amp;received[1], FRAME_SIZE - 2U);
+  if (crc_received != received[FRAME_SIZE - 1U])
+    frame_ok = 0;
+} else {
+  frame_ok = 0;
+}</code></pre>
+    <p>La expresión usa evaluación de cortocircuito con <code>&amp;&amp;</code>: si <code>frame_ok</code> es cero, C no evalúa la expresión siguiente ni accede a <code>received[0]</code>. Si es distinto de cero, compara el byte de índice 0 con <code>0xAA</code>. Para recalcular el CRC pasa la dirección de <code>received[1]</code> y longitud <code>FRAME_SIZE - 2</code>, que vale 4: recorre los cuatro bytes del payload y excluye sincronismo y CRC final. Finalmente compara el CRC calculado con el recibido en índice 5.</p>
+    <table><caption>Traza esperada derivada del código, no de una ejecución nueva</caption><thead><tr><th>Momento</th><th>Datos o estado</th></tr></thead><tbody>
+      <tr><td>Payload</td><td><code>01 02 03 04</code></td></tr><tr><td>CRC calculado al armar</td><td><code>32</code>, guardado en índice 5</td></tr>
+      <tr><td>Después de seis inserciones y retiros</td><td><code>received = AA 01 02 03 04 32</code>, operaciones exitosas</td></tr><tr><td>Validación</td><td>Sincronismo coincide; CRC recalculado es <code>32</code></td></tr><tr><td>Salida esperada</td><td><code>frame: ok crc=0x32</code></td></tr>
+    </tbody></table>
+    <p>Si la cabecera, las operaciones del ring o la comparación CRC fallan, el flujo previsto imprime <code>frame: error</code>. El programa no incluye aquí un receptor genérico de tramas: conoce el tamaño y la estructura de esta demostración.</p>
+    <h3>Una explicación oral posible</h3>
+    <blockquote id="oral"><p>«El timer guarda un contador estático privado: init lo pone a cero, tick incrementa uno y get lo devuelve. En la demo tres llamadas producen tres ticks lógicos, no necesariamente tres milisegundos físicos. La trama tiene seis bytes: sincronismo AA, cuatro bytes de payload y CRC. Se reinicia el ring, se comprueban inserciones y retiros, y se verifica cabecera y CRC del payload, sin sincronismo ni byte CRC».</p></blockquote>
+  </section>
+  <section id="preguntas">
+    <h2>4. Comprobá lo que aprendiste</h2>
+    <form data-quiz>
+      <fieldset data-question><legend>P1. ¿Qué función cumple cada llamada del timer?</legend>
+      <label><input id="q1-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> timer_init pone el contador acumulado nuevamente en cero al iniciar.</label>
+        <label><input id="q1-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> timer_tick consulta el valor sin modificar nunca el contador actual.</label>
+        <label><input id="q1-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> timer_get_ms espera un milisegundo real antes de responder cada consulta.</label>
+        <label><input id="q1-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> timer_ms es una variable pública accesible desde cualquier archivo fuente.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correcta: A.</strong> <code>timer_init</code> asigna cero. B: <code>timer_tick</code> incrementa. C: <code>timer_get_ms</code> devuelve el acumulado, no espera. D: <code>static</code> limita <code>timer_ms</code> a su archivo.</p></div>
+      </fieldset>
+      <fieldset data-question><legend>P2. ¿Qué se puede concluir de tres llamadas a timer_tick?</legend>
+        <label><input id="q2-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> Después de inicializar, la consulta devuelve tres ticks acumulados correctamente.</label>
+        <label><input id="q2-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> Las llamadas garantizan tres milisegundos físicos transcurridos en cualquier ejecución.</label>
+        <label><input id="q2-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> Cada tick reinicia el contador antes de realizar otro incremento.</label>
+        <label><input id="q2-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> Consultar el acumulado añade otro tick al timer cada vez.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correcta: A.</strong> Tres incrementos luego de <code>timer_init</code> dejan el valor lógico en tres. B: no hay espera ni fuente periódica. C: solo la inicialización pone cero. D: la consulta no modifica estado.</p></div>
+      </fieldset>
+      <fieldset data-question><legend>P3. ¿Cómo se organiza la trama del ejemplo?</legend>
+        <label><input id="q3-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> El índice cero contiene sincronismo y el último contiene CRC.</label>
+        <label><input id="q3-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> El índice cero contiene CRC y el último contiene sincronismo.</label>
+        <label><input id="q3-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> Los índices uno a cuatro contienen los cuatro bytes payload.</label>
+        <label><input id="q3-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> La trama tiene cuatro bytes porque excluye sincronismo y CRC.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y C.</strong> La trama suma un byte de sync, cuatro de payload y uno CRC: seis en total. B invierte los extremos. D confunde la longitud del payload con el tamaño total de la trama.</p></div>
+      </fieldset>
+      <fieldset data-question><legend>P4. ¿Qué bytes cubre el CRC recalculado?</legend>
+        <label><input id="q4-a" type="checkbox" data-correct="false"> <span class="option-letter">A.</span> Recorre los seis bytes, incluyendo la cabecera y CRC recibido.</label>
+        <label><input id="q4-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> Empieza en índice uno y procesa cuatro bytes del payload.</label>
+        <label><input id="q4-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> Empieza en índice cero y procesa solamente el sincronismo recibido.</label>
+        <label><input id="q4-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> Excluye sincronismo y CRC guardado al final de la trama.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: B y D.</strong> La dirección es <code>&amp;received[1]</code> y la longitud es <code>6 - 2 = 4</code>. A incluye bytes que no forman parte del cálculo definido; C apunta al byte de sincronismo, no al payload.</p></div>
+      </fieldset>
+      <fieldset data-question><legend>P5. ¿Qué describe correctamente la demo de transporte?</legend>
+        <label><input id="q5-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> El buffer se reinicia antes de insertar toda la trama.</label>
+        <label><input id="q5-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> La llamada ring_push transmite cada byte por la UART automáticamente.</label>
+        <label><input id="q5-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> Los retornos de inserción y retiro actualizan frame_ok ante fallos.</label>
+        <label><input id="q5-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> Un CRC coincidente demuestra autenticidad y descarta todos los errores.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y C.</strong> <code>ring_init</code> precede a los bucles y los estados no exitosos ponen <code>frame_ok</code> en cero. B es falsa: el ring es memoria local, no un transporte UART automático. D es falsa: CRC no autentica ni detecta necesariamente cualquier alteración.</p></div>
+      </fieldset>
+      <button type="submit">Comprobar respuestas</button><p data-quiz-summary role="status" aria-live="polite"></p>
+    </form>
+  </section>
+  <p class="source"><span class="note-title">Fuentes</span> <a href="../tps/tp3/trabajo_practico/README.md">Consigna TP3</a>, hitos 8–9; <a href="../tps/tp3/trabajo_practico/src/hal/hal_timer.h">hal_timer.h</a>; <a href="../tps/tp3/trabajo_practico/src/hal/hal_timer.c">hal_timer.c</a>; <a href="../tps/tp3/trabajo_practico/src/demo/demo_embedded.c">demo_embedded.c</a>; <a href="../tps/tp3/trabajo_practico/src/hal/hal_ring.h">hal_ring.h</a>; <a href="../tps/tp3/trabajo_practico/src/lib/strutils.h">strutils.h</a>.</p>
+  <nav class="lesson-nav" aria-label="Navegación de la lección"><a href="../index.html">Índice de lecciones</a><a href="0006-hito-7-buffer-circular.html">Lección anterior</a><a href="#timer">Volver al inicio</a><a href="0008-hitos-10-13-demos-y-version.html">Lección siguiente</a></nav>
+</main>
+</body>
+</html>

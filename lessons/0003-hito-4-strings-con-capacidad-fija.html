@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hito 4: strings con capacidad fija</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+</head>
+<body>
+<main>
+  <p class="kicker">Preparación TP3 · Lección 0003</p>
+  <h1>Hito 4: strings con capacidad fija</h1>
+  <p class="lead">Al terminar vas a poder explicar cómo el TP construye <code>value=42</code>, dónde guarda cada carácter y cómo reserva espacio para terminar el string sin salir del buffer.</p>
+
+  <section id="buffer">
+    <h2>1. Un buffer no es lo mismo que su contenido</h2>
+    <p>Un <strong>buffer</strong> es un espacio para almacenar datos. Un string de C es una secuencia de caracteres terminada por el carácter nulo <code>'\0'</code>. Ese terminador vale cero: no es el carácter <code>'0'</code>, que representa el dígito cero.</p>
+    <pre><code>// strutils.h:15–30 (extracto)
+#define STR_MAX_LEN 128
+
+typedef struct {
+  char data[STR_MAX_LEN];
+  size_t len;
+} strbuf_t;</code></pre>
+    <p><code>typedef</code> le da el nombre <code>strbuf_t</code> a esta estructura. <code>data</code> es un array de 128 caracteres; <code>len</code> guarda cuántos caracteres útiles hay, <strong>sin contar el NUL</strong>. <code>size_t</code> es un tipo entero sin signo usado para tamaños e índices; su ancho depende de la plataforma, no tiene por qué ser 32 bits.</p>
+    <pre><code>String "hi":
+índice       0    1     2       3 ... 127
+data        'h'  'i'  '\0'      no importa
+len = 2     capacidad = 128    espacio ocupado = 3</code></pre>
+    <p>La capacidad no cambia al cambiar el texto. Como hay que reservar un lugar para <code>'\0'</code>, entran como máximo <strong>127 caracteres útiles</strong>. La relación que mantienen estas funciones es <code>0 &lt;= len &lt;= 127</code> y <code>data[len] == '\0'</code>. Son bytes de caracteres de C; en UTF-8, una letra acentuada puede ocupar varios bytes.</p>
+    <p>El array está dentro de la estructura: no se pide memoria dinámica con <code>malloc</code> porque en sistemas embebidos se suele recomendar evitar el uso del heap (para prevenir fragmentación de memoria RAM, fugas de memoria y tiempos de asignación impredecibles, tal como se explica en la <a href="../reference/0002-secciones-de-memoria-y-layout.html#memoria-dinamica">referencia de memoria</a>). La estructura completa ocupa más que los 128 bytes del array, porque también contiene <code>len</code> y puede incluir relleno de alineación (padding).</p>
+  </section>
+
+  <section id="copiar">
+    <h2>2. Inicializar y reemplazar el contenido</h2>
+    <pre><code>void strbuf_init(strbuf_t *buf) {
+  buf-&gt;data[0] = '\0';
+  buf-&gt;len = 0;
+}
+
+void strbuf_set(strbuf_t *buf, const char *src) {
+  size_t i = 0;
+
+  while (src[i] != '\0' &amp;&amp; i &lt; STR_MAX_LEN - 1) {
+    buf-&gt;data[i] = src[i];
+    i++;
+  }
+
+  buf-&gt;data[i] = '\0';
+  buf-&gt;len = i;
+}</code></pre>
+    <p><code>buf</code> es un puntero a la estructura que se quiere modificar; <code>buf-&gt;len</code> accede a su campo <code>len</code>. <code>src</code> apunta al texto de origen y <code>const</code> indica que no se modifica ese texto a través de este puntero.</p>
+    <ul>
+      <li><code>init</code> representa el string vacío con <code>data[0] = '\0'</code> y <code>len = 0</code>. No necesita borrar todo el array: un lector de strings se detiene en el primer NUL.</li>
+      <li><code>set</code> reemplaza el contenido: empieza siempre en el índice cero. Copia hasta encontrar el NUL de origen o alcanzar 127 caracteres.</li>
+      <li>Después escribe su propio NUL y actualiza <code>len</code>. Si el texto no cabe, se <strong>trunca</strong>: queda solo el prefijo que entra, sin ampliar el buffer.</li>
+    </ul>
+    <p>Ejemplo: <code>strbuf_set(&amp;sb, "value=")</code> deja seis caracteres útiles y <code>sb.data[6] = '\0'</code>. <code>&amp;sb</code> significa «la dirección de <code>sb</code>»; así la función modifica la estructura original.</p>
+    <div class="note">
+      <span class="note-title">Precondiciones y seguridad en C</span>
+      <p>Las funciones de <code>strbuf</code> evitan desbordar el tamaño del buffer (<code>data[128]</code>), pero asumen que los punteros que reciben son válidos (no <code>NULL</code>) y que el string de origen termina en <code>'\0'</code>. Si le pasás un puntero inválido o un array sin terminador nulo, el programa fallará al intentar leer memoria no permitida. En C, limitar la cantidad de bytes que se escriben no reemplaza chequear que los punteros sean válidos.</p>
+    </div>
+  </section>
+
+  <section id="append">
+    <h2>3. Agregar: empezar en len, no en cero</h2>
+    <pre><code>size_t strbuf_append(strbuf_t *buf, const char *src) {
+  size_t i = 0;
+
+  while (src[i] != '\0' &amp;&amp; buf-&gt;len &lt; STR_MAX_LEN - 1) {
+    buf-&gt;data[buf-&gt;len] = src[i];
+    buf-&gt;len++;
+    i++;
+  }
+
+  buf-&gt;data[buf-&gt;len] = '\0';
+  return i;
+}</code></pre>
+    <p><code>set</code> reemplaza; <code>append</code> conserva lo anterior y agrega al final. La primera escritura pisa el NUL anterior, ubicado en <code>data[len]</code>. Al terminar, se escribe un nuevo NUL detrás del texto agregado. Guardar <code>len</code> evita recorrer otra vez todo el destino para encontrar su final.</p>
+    <table>
+      <caption>El retorno cuenta lo agregado, no el total</caption>
+      <thead><tr><th>Antes</th><th>Intento</th><th>Después</th><th>Retorno</th></tr></thead>
+      <tbody>
+        <tr><td><code>len = 6</code></td><td>Agregar <code>"42"</code></td><td><code>len = 8</code>, NUL en 8</td><td><code>2</code></td></tr>
+        <tr><td><code>len = 126</code></td><td>Agregar <code>"42"</code></td><td>Agrega solo <code>'4'</code>; NUL en 127</td><td><code>1</code></td></tr>
+        <tr><td><code>len = 127</code></td><td>Agregar <code>"42"</code></td><td>No agrega; conserva NUL en 127</td><td><code>0</code></td></tr>
+      </tbody>
+    </table>
+    <p>El último índice válido es 127, no 128. La condición permite escribir caracteres útiles hasta el índice 126 y reserva el 127 para el terminador. Un retorno menor que la longitud del texto de origen indica que no se agregó completo.</p>
+  </section>
+
+  <section id="entero">
+    <h2>4. De 42 a los caracteres '4' y '2'</h2>
+    <p>Un entero no es un string. <code>strbuf_append_int</code> construye su representación decimal en arrays temporales y luego llama a <code>strbuf_append</code>. Usa <code>digits[12]</code> y <code>text[12]</code>: alcanzan para los diez dígitos de la magnitud de un <code>int32_t</code>, el signo y el NUL.</p>
+    <pre><code>// strutils.c:49–60 (extracto)
+if (value &lt; 0) {
+  negative = 1;
+  magnitude = (uint32_t)(-(int64_t)value);
+} else {
+  magnitude = (uint32_t)value;
+}
+
+do {
+  digits[n++] = (char)('0' + magnitude % 10);
+  magnitude /= 10;
+} while (magnitude != 0);</code></pre>
+    <p>El cast a <code>int64_t</code> se hace <strong>antes de negar</strong>: permite obtener la magnitud de <code>INT32_MIN</code> (−2.147.483.648), cuyo positivo no cabe en <code>int32_t</code>, pero sí en <code>uint32_t</code>. No es equivalente a negar primero y convertir después.</p>
+    <table>
+      <caption>Extracción de los dígitos de 42</caption>
+      <thead><tr><th>Magnitud antes</th><th>Resto % 10</th><th>Carácter guardado</th><th>Magnitud después de / 10</th></tr></thead>
+      <tbody>
+        <tr><td><code>42</code></td><td><code>2</code></td><td><code>digits[0] = '2'</code></td><td><code>4</code></td></tr>
+        <tr><td><code>4</code></td><td><code>4</code></td><td><code>digits[1] = '4'</code></td><td><code>0</code></td></tr>
+      </tbody>
+    </table>
+    <p><code>% 10</code> obtiene el último dígito y <code>/ 10</code> lo quita. Sumar el resto a <code>'0'</code> obtiene su carácter decimal. Los dígitos salen <strong>al revés</strong>: primero <code>'2'</code>, después <code>'4'</code>. El <code>do/while</code> ejecuta al menos una vuelta: para cero guarda <code>'0'</code>, no un texto vacío.</p>
+    <pre><code>// strutils.c:63–71 (extracto)
+if (negative == 1)
+  text[out++] = '-';
+
+while (n &gt; 0)
+  text[out++] = digits[--n];
+
+text[out] = '\0';
+return strbuf_append(buf, text);</code></pre>
+    <p>Si hace falta, agrega el signo; después recorre los dígitos de atrás hacia adelante. <code>digits[--n]</code> decrementa antes de leer. Para 42, arma <code>text = "42"</code> y lo agrega al destino. Los temporales no necesitan <code>malloc</code>; <code>digits</code> no necesita NUL porque se recorre mediante <code>n</code>, mientras que <code>text</code> sí se termina para pasarlo a <code>append</code>.</p>
+    <p>El retorno sigue siendo la cantidad de caracteres realmente agregados, incluido el signo si se copió. Si falta espacio, incluso la representación de un número puede quedar truncada: no hay una garantía de «todo o nada».</p>
+  </section>
+
+  <section id="demo">
+    <h2>5. La demo completa: value=42</h2>
+    <pre><code>// demo_str.c:18–23
+strbuf_init(&amp;sb);
+strbuf_set(&amp;sb, "value=");
+strbuf_append_int(&amp;sb, 42);
+print_str(strbuf_cstr(&amp;sb));
+print_str("\n");</code></pre>
+    <table>
+      <caption>Estado después de cada operación</caption>
+      <thead><tr><th>Operación</th><th>Texto</th><th>len</th><th>Índice del NUL</th></tr></thead>
+      <tbody>
+        <tr><td><code>init</code></td><td><code>""</code></td><td><code>0</code></td><td><code>0</code></td></tr>
+        <tr><td><code>set("value=")</code></td><td><code>"value="</code></td><td><code>6</code></td><td><code>6</code></td></tr>
+        <tr><td><code>append_int(42)</code></td><td><code>"value=42"</code></td><td><code>8</code></td><td><code>8</code></td></tr>
+      </tbody>
+    </table>
+    <pre><code>const char *strbuf_cstr(const strbuf_t *buf) { return buf-&gt;data; }</code></pre>
+    <p><code>cstr</code> devuelve un puntero al array que ya existe: <strong>no copia el texto ni reserva memoria nueva</strong>. <code>const char *</code> no permite modificar los caracteres mediante ese puntero. No congela la estructura: un futuro <code>set</code> o <code>append</code> puede cambiar lo que ve ese puntero, y este deja de ser válido cuando deja de existir el buffer.</p>
+    <p><code>print_str</code> recibe ese puntero y lee hasta el NUL. La línea esperada por la consigna y deducida de esta traza es:</p>
+    <pre><code>value=42</code></pre>
+    <h3>Una explicación oral posible</h3>
+    <blockquote><p>«El buffer tiene 128 lugares, pero reservo uno para el NUL. Guardo la longitud sin contar ese terminador. Primero copio value= y quedan seis caracteres; después convierto 42 en texto y agrego dos. Quedan ocho caracteres y el NUL en el índice ocho. cstr devuelve el puntero al mismo array para imprimirlo».</p></blockquote>
+  </section>
+
+  <section id="preguntas">
+    <h2>6. Comprobá lo que aprendiste</h2>
+    <form data-quiz>
+      <fieldset data-question>
+        <legend>P1. ¿Cómo se relacionan capacidad, longitud y terminador?</legend>
+        <label><input id="q1-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> El buffer reserva un lugar para guardar el terminador nulo.</label>
+        <label><input id="q1-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> La longitud incluye siempre el terminador dentro de su cuenta.</label>
+        <label><input id="q1-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> La capacidad permite guardar como máximo 127 caracteres de texto.</label>
+        <label><input id="q1-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> El carácter nulo representa el dígito cero dentro del texto.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y C.</strong> De los 128 lugares, uno se reserva para <code>'\0'</code>. Por eso hay hasta 127 caracteres útiles. B es falsa: <code>len</code> excluye el NUL. D es falsa: <code>'\0'</code> termina el string; <code>'0'</code> es un carácter de texto distinto.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P2. ¿Qué hacen init y set?</legend>
+        <label><input id="q2-a" type="checkbox" data-correct="false"> <span class="option-letter">A.</span> Inicializar requiere escribir ceros sobre todos los lugares del array.</label>
+        <label><input id="q2-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> Inicializar coloca un terminador al principio y deja longitud cero.</label>
+        <label><input id="q2-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> Reemplazar copia desde cero y trunca cuando falta espacio disponible.</label>
+        <label><input id="q2-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> Reemplazar conserva el texto anterior y agrega después del final.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: B y C.</strong> <code>init</code> escribe solo <code>data[0]</code> y <code>len</code>: eso basta para representar el string vacío, así que A es falsa. <code>set</code> copia desde cero, limita a 127, termina con NUL y actualiza <code>len</code>. D describe agregar, no reemplazar.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P3. Con len = 126, ¿qué ocurre al agregar "42"?</legend>
+        <label><input id="q3-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> Se agrega solamente el primer carácter y se devuelve uno.</label>
+        <label><input id="q3-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> Se agregan ambos caracteres y se escribe fuera del array.</label>
+        <label><input id="q3-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> Se rechaza todo el texto sin modificar el contenido previo.</label>
+        <label><input id="q3-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> La longitud termina en 127 y allí queda el terminador.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y D.</strong> Se escribe <code>'4'</code> en el índice 126 y se incrementa <code>len</code> a 127. El bucle ya no permite copiar <code>'2'</code>; escribe NUL en 127 y devuelve 1. B ignora el límite. C supone una operación indivisible, pero esta implementación copia el prefijo que entra.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P4. ¿Cómo convierte append_int un entero a texto?</legend>
+        <label><input id="q4-a" type="checkbox" data-correct="false"> <span class="option-letter">A.</span> La extracción decimal empieza por el primer dígito del número.</label>
+        <label><input id="q4-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> El resto decimal obtiene primero el último dígito del número.</label>
+        <label><input id="q4-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> El bucle permite representar cero ejecutándose al menos una vez.</label>
+        <label><input id="q4-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> La conversión reserva memoria dinámica para almacenar todos los dígitos.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: B y C.</strong> <code>% 10</code> extrae el último dígito: para 42 guarda primero <code>'2'</code> y después <code>'4'</code>, al contrario de A. El <code>do/while</code> entra también para cero. Luego invierte los dígitos y agrega el texto. D es falsa: usa arrays locales de tamaño fijo, no memoria dinámica.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P5. Después de construir value=42, ¿qué afirmaciones son correctas?</legend>
+        <label><input id="q5-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> La longitud queda en ocho sin contar el terminador nulo.</label>
+        <label><input id="q5-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> La función cstr entrega una copia independiente del texto guardado.</label>
+        <label><input id="q5-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> La operación append_int devuelve ocho por contar el texto completo.</label>
+        <label><input id="q5-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> La función cstr devuelve un puntero al mismo array existente.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y D.</strong> <code>value=</code> tiene seis caracteres y <code>42</code> agrega dos: <code>len = 8</code> y NUL en el índice 8. C es falsa porque el retorno es 2, la cantidad agregada. <code>cstr</code> devuelve <code>buf-&gt;data</code>; no hace una copia, así que B es falsa.</p></div>
+      </fieldset>
+      <button type="submit">Comprobar respuestas</button>
+      <p data-quiz-summary role="status" aria-live="polite"></p>
+    </form>
+  </section>
+
+  <p class="source"><span class="note-title">Fuentes</span> <a href="../tps/tp3/trabajo_practico/README.md">Consigna del TP3</a>, hito 4; <a href="../tps/tp3/trabajo_practico/src/lib/strutils.h">strutils.h</a>, líneas 15–66; <a href="../tps/tp3/trabajo_practico/src/lib/strutils.c">strutils.c</a>, líneas 11–74; <a href="../tps/tp3/trabajo_practico/src/demo/demo_str.c">demo_str.c</a>, líneas 18–23; <a href="../tps/tp3/trabajo_practico/Makefile">Makefile</a>. Para la semántica de C: <a href="https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf">borrador público de C11, N1570</a>, §§6.4.4.4 (caracteres), 6.5.2.3 (miembros), 6.5.5 (división y resto), 7.1.1 (strings) y 7.19 (<code>size_t</code>).</p>
+  <nav class="lesson-nav" aria-label="Navegación de la lección">
+    <a href="../index.html">Índice de lecciones</a>
+    <a href="0004-hito-5-trim-y-crc8.html">Siguiente lección</a>
+    <a href="0002-hitos-2-3-matematica-y-simbolos.html">Lección anterior</a>
+    <a href="#buffer">Volver al inicio</a>
+    <a href="#preguntas">Ir al cuestionario</a>
+  </nav>
+</main>
+</body>
+</html>

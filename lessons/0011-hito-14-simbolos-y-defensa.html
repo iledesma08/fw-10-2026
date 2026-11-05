@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hito 14: símbolos y defensa</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+</head>
+<body>
+<main>
+  <p class="kicker">Preparación TP3 · Lección 0011</p>
+  <h1>Hito 14: símbolos y defensa</h1>
+  <p class="lead">Vas a defender cinco respuestas conectando objetivo, comando, dato informado, conclusión y límite. No ejecutamos compilaciones ni binarios: los resultados citados son los declarados en el informe.</p>
+
+  <section id="simbolos">
+    <h2>1. P1 y P2: definiciones y referencias</h2>
+    <h3>P1 · Tres funciones globales definidas</h3>
+    <pre><code>$ nm build/lib/mathlib.o</code></pre>
+    <p>El informe declara <code>T math_factorial</code>, <code>T math_gcd</code> y <code>T math_isqrt</code>, con valor mostrado <code>0000000000000000</code>. Conclusión: las tres están definidas globalmente en el objeto. <code>t</code> sería local y <code>U</code> una referencia no definida. El valor cero repetido no significa que compartan dirección real de ejecución: la compilación usa <code>-ffunction-sections</code>, de modo que cada función va en su propia sección y el valor del símbolo se interpreta relativo a ella.</p>
+    <h3>P2 · Quién usa cada símbolo y quién lo provee</h3>
+    <pre><code>$ nm -u build/demo/demo_embedded.o
+$ nm --defined-only build/platform/print.o
+$ nm --defined-only build/platform/host/print_host.o
+$ ar t build/libutils.a
+$ nm -A --defined-only build/libutils.a</code></pre>
+    <p><code>nm -u</code> muestra consumidores sin definición en <code>demo_embedded.o</code>, no quién los provee. Según el informe, <code>print_str</code>, <code>print_dec</code> y <code>print_hex</code> se definen directamente en <code>print.o</code>; <code>print_chr</code>, en <code>print_host.o</code>. No son miembros de la biblioteca. Las definiciones que sí están en miembros de <code>libutils.a</code> se resumen aquí:</p>
+    <table><caption>Proveedores declarados para la demo</caption><thead><tr><th>Símbolos</th><th>Miembro de libutils.a</th></tr></thead><tbody>
+      <tr><td><code>ring_init</code>, <code>ring_push</code>, <code>ring_pop</code></td><td><code>hal_ring.o</code></td></tr>
+      <tr><td><code>uart_init</code>, <code>uart_send</code></td><td><code>hal_uart.o</code></td></tr>
+      <tr><td><code>timer_init</code>, <code>timer_tick</code>, <code>timer_get_ms</code></td><td><code>hal_timer.o</code></td></tr>
+      <tr><td><code>str_crc8</code></td><td><code>strutils.o</code></td></tr>
+    </tbody></table>
+    <p><code>mathlib.o</code> también pertenece al archivo, pero esa demo no consume sus funciones. <code>__stack_chk_fail</code> puede aparecer por protección de pila según flags, compilador y libc/toolchain; no es una definición del TP. <code>__ctype_b_loc</code> puede ser referencia de <code>strutils.o</code> por su uso de <code>isspace</code>; no es por ello una referencia obligatoria de <code>demo_embedded.o</code>. Pueden variar según build y plataforma. Una referencia <code>U __stack_chk_fail@GLIBC_2.4</code> es una importación versionada válida, no un error; el sufijo no demuestra qué versión exacta de libc está instalada.</p>
+  </section>
+  <section id="tamano">
+    <h2>2. P3: resumen no equivale a sección</h2>
+    <pre><code>$ size build/building_process_demo
+$ size -A build/building_process_demo
+$ readelf -S -W build/building_process_demo
+$ objdump -h build/building_process_demo</code></pre>
+    <p><code>size</code> resume categorías como <code>text</code>; <code>text</code> no es una sección individual. Para responder cuál sección es mayor, inspeccioná las secciones. El informe declara que <code>.text</code> es la mayor de las cargadas y cita, para el build normal, <code>.text 4306</code>, <code>.eh_frame 1132</code>, <code>.dynamic 496</code> y <code>.rodata 260</code>; declara <code>.text 3188</code> en el optimizado.</p>
+    <p><code>readelf -S -W</code> y <code>objdump -h</code> permiten inspeccionar secciones y sus tamaños; la bandera <code>A</code> de ELF (<code>SHF_ALLOC</code>) señala secciones asignables/cargadas. No todas las secciones de un archivo son memoria cargada. Con <code>-g</code> puede haber secciones de depuración grandes que no se cargan; por eso “la mayor del archivo” y “la mayor cargada” no son necesariamente la misma pregunta.</p>
+    <table><caption>Dos modos de objdump</caption><thead><tr><th>Comando</th><th>Qué aporta</th><th>Límite</th></tr></thead><tbody><tr><td><code>objdump -h</code></td><td>Encabezados y tamaños de secciones.</td><td>No muestra instrucciones desensambladas.</td></tr><tr><td><code>objdump -d</code></td><td>Desensambla secciones esperadas como código.</td><td>No es resumen de tamaños de todas las secciones.</td></tr></tbody></table>
+  </section>
+  <section id="archivo">
+    <h2>3. P4 y P5: miembros y dependencia</h2>
+    <pre><code>$ ar t build/libutils.a
+$ nm -A build/libutils.a | grep math_factorial</code></pre>
+    <p>El informe declara que <code>math_factorial</code> aparece como <code>build/libutils.a:mathlib.o:… T math_factorial</code>. Por tanto, el miembro es <code>mathlib.o</code>. <code>ar t</code> lista miembros; la salida <code>nm -A</code> relaciona el símbolo con el miembro. Armar la biblioteca no requiere ejecutar la aplicación.</p>
+    <p>La app contiene referencias que el enlace resuelve consultando <code>libutils.a</code>; el Makefile pone <code>-Lbuild -lutils</code> después de los objetos de app. El orden importa en este enlace. El archivo puede tener referencias propias a libc —el informe cita <code>__stack_chk_fail</code> y <code>__ctype_b_loc</code>— sin necesitar <code>main</code> ni demos. Eso no prueba autosuficiencia universal: depende de qué símbolos externos queden y qué plataforma/libc se use. Linkear una biblioteca estática tampoco convierte por sí solo el ejecutable en totalmente estático.</p>
+  </section>
+  <section id="preguntas">
+    <h2>4. Defensa integrada</h2>
+    <form data-quiz>
+      <fieldset data-question><legend>P1. ¿Qué sostiene la respuesta sobre mathlib.o?</legend>
+        <label><input id="q1-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> nm reporta tres símbolos T; ceros no implican igual dirección.</label>
+        <label><input id="q1-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> U indica un símbolo local definido dentro del objeto compilado.</label>
+        <label><input id="q1-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> Tres valores cero prueban direcciones idénticas durante ejecución del programa.</label>
+        <label><input id="q1-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> La letra t indica símbolos globales definidos como funciones exportadas.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correcta: A.</strong> El informe declara tres símbolos T globales definidos y valores cero en secciones de función. B invierte el significado de U; C ignora las secciones separadas; D confunde T con t: la letra t indica una definición local.</p></div>
+      </fieldset>
+      <fieldset data-question><legend>P2. ¿Cómo se justifica quién provee los símbolos de demo_embedded.o?</legend>
+        <label><input id="q2-a" type="checkbox" data-correct="false"> <span class="option-letter">A.</span> nm -u identifica directamente el miembro que define cada símbolo.</label>
+        <label><input id="q2-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> nm -u muestra consumidores; nm -A atribuye definiciones a miembros.</label>
+        <label><input id="q2-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> print_chr pertenece a libutils.a como miembro independiente del archivo contenedor.</label>
+        <label><input id="q2-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> Toda importación versionada prueba error por libc incompatible instalada localmente.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correcta: B.</strong> El informe separa referencias sin definir de definiciones: print_chr está en el objeto host, los helpers indicados en miembros de la biblioteca. A atribuye demasiado a nm -u; C contradice la tabla; D convierte una referencia versionada válida en un diagnóstico no demostrado.</p></div>
+      </fieldset>
+      <fieldset data-question><legend>P3. ¿Qué demuestra la respuesta sobre tamaños?</legend>
+        <label><input id="q3-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> La opción -A permite comparar tamaños de las secciones individuales.</label>
+        <label><input id="q3-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> La columna text nombra una sección ELF individual siempre cargada.</label>
+        <label><input id="q3-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> El resumen text equivale exactamente al tamaño físico del archivo.</label>
+        <label><input id="q3-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> Secciones de depuración siempre ocupan memoria durante ejecución del programa.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correcta: A.</strong> <code>size -A</code>, <code>readelf -S</code> y <code>objdump -h</code> permiten inspeccionar secciones individuales. B confunde una columna agregada con una sección. C confunde esa categoría con el archivo completo. D ignora que las secciones de depuración pueden no ser asignables a memoria de ejecución.</p></div>
+      </fieldset>
+      <fieldset data-question><legend>P4. ¿Cómo se localiza math_factorial en el archivo?</legend>
+        <label><input id="q4-a" type="checkbox" data-correct="false"> <span class="option-letter">A.</span> make verify imprime el miembro sin compilar ni ejecutar comprobaciones.</label>
+        <label><input id="q4-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> nm -A informa mathlib.o como miembro que define math_factorial globalmente.</label>
+        <label><input id="q4-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> El símbolo pertenece necesariamente a demo_embedded.o como proveedor del código.</label>
+        <label><input id="q4-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> ar t muestra las direcciones de símbolos definidos en miembros.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correcta: B.</strong> El informe declara la salida archivo:miembro:símbolo con mathlib.o y T math_factorial. ar t lista nombres de miembros, no símbolos ni sus tipos. make verify compila y verifica, no es una lectura inocua del archivo.</p></div>
+      </fieldset>
+      <fieldset data-question><legend>P5. ¿Qué explica la dependencia de enlace?</legend>
+        <label><input id="q5-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> El Makefile sitúa -lutils tras objetos que necesitan resolver referencias.</label>
+        <label><input id="q5-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> Toda biblioteca archivada requiere main antes de crearse mediante ar.</label>
+        <label><input id="q5-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> Linkear .a garantiza ejecutable totalmente estático en cualquier plataforma objetivo.</label>
+        <label><input id="q5-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> Ningún miembro de biblioteca puede referenciar símbolos externos de libc.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correcta: A.</strong> La regla coloca los objetos antes de -Lbuild -lutils. ar puede archivar objetos sin aplicación; la biblioteca puede requerir libc, y usar .a no implica enlace totalmente estático. B, C y D afirman universalidades que la evidencia no sostiene.</p></div>
+      </fieldset>
+      <button type="submit">Comprobar respuestas</button><p data-quiz-summary role="status" aria-live="polite"></p>
+    </form>
+  </section>
+  <p class="source"><span class="note-title">Fuentes del curso</span> <a href="../tps/tp3/trabajo_practico/README.md">Consigna TP3</a>, preguntas del hito 14 y verificación; <a href="../tps/tp3/trabajo_practico/INFORME.md">INFORME.md</a>, respuestas y salidas declaradas; <a href="../tps/tp3/trabajo_practico/Makefile">Makefile</a>, flags, archivo estático y regla de enlace.</p>
+  <nav class="lesson-nav" aria-label="Navegación de la lección"><a href="../index.html">Índice de lecciones</a><a href="0010-hito-12-optimizacion-y-tamanos.html">Lección anterior</a><a href="0012-exposicion-integral-del-tp3.html">Siguiente: exposición integral</a><a href="#preguntas">Ir a la defensa</a></nav>
+</main>
+</body>
+</html>

@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hitos 2 y 3: matemática entera y símbolos definidos</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+</head>
+<body>
+<main>
+  <p class="kicker">Preparación TP3 · Lección 0002</p>
+  <h1>Hitos 2 y 3: matemática entera y símbolos definidos</h1>
+
+  <p class="lead">Al terminar vas a poder recorrer las cuatro funciones de <code>mathlib</code> con una entrada chica y explicar por qué <code>nm build/lib/mathlib.o</code> las muestra como <code>T</code>, no como <code>U</code>.</p>
+
+  <section id="mapa">
+    <h2>1. Cuatro funciones y una demo</h2>
+
+    <p>El hito 2 pide <code>math_factorial</code> y <code>math_gcd</code>. El hito 3 agrega <code>math_isqrt</code> y <code>math_is_prime</code>. Las cuatro viven en <code>src/lib/mathlib.c</code>; sus prototipos están en <code>src/lib/mathlib.h</code>, y <code>src/demo/demo_math.c</code> las usa para imprimir resultados.</p>
+
+    <table>
+      <caption>Archivos y responsabilidades</caption>
+      <thead>
+        <tr><th>Archivo</th><th>Qué aporta y qué no aporta</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code class="nowrap">mathlib.h</code></td><td>Aporta los prototipos de las cuatro funciones y la definición <code>static inline</code> de <code>bit_set</code>; no aporta los cuerpos de factorial, GCD, raíz y primalidad.</td></tr>
+        <tr><td><code class="nowrap">mathlib.c</code></td><td>Aporta las definiciones globales de las cuatro funciones; no aporta la salida por consola.</td></tr>
+        <tr><td><code class="nowrap">demo_math.c</code></td><td>Aporta las llamadas, conversiones y textos de la demo; no aporta la implementación de las operaciones.</td></tr>
+      </tbody>
+    </table>
+
+    <p>Dentro de ese reparto, la tabla siguiente resume qué hace cada operación:</p>
+
+    <table>
+      <caption>Qué hace cada función</caption>
+      <thead>
+        <tr><th>Función</th><th>Recibe y devuelve</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code class="nowrap">math_factorial</code></td><td>Recibe <code>int32_t n</code>; devuelve <code>n!</code>, o <code>0</code> si <code>n &lt; 0</code>. Producto iterativo desde 2.</td></tr>
+        <tr><td><code class="nowrap">math_gcd</code></td><td>Recibe <code>int32_t a</code> y <code>b</code>; devuelve el Máximo Común Divisor: <code>gcd(|a|, |b|)</code>. Algoritmo de Euclides.</td></tr>
+        <tr><td><code class="nowrap">math_isqrt</code></td><td>Recibe <code>uint32_t n</code>; devuelve la parte entera de <code>sqrt(n)</code>. Aproximaciones enteras de Newton.</td></tr>
+        <tr><td><code class="nowrap">math_is_prime</code></td><td>Recibe <code>int32_t n</code>; devuelve <code>1</code> si es primo y <code>0</code> si no. Prueba candidatos <code>6k ± 1</code>.</td></tr>
+      </tbody>
+    </table>
+
+    <p>Hay una excepción que conviene recordar: <code>mathlib.h</code> declara las cuatro funciones, pero también contiene el cuerpo <code>static inline</code> de <code>bit_set</code> (líneas 49–51). Es decir, un header no siempre contiene solo declaraciones; en este TP, <code>print.h</code> sí contiene solo prototipos, mientras que <code>mathlib.h</code> mezcla prototipos y una definición inline. <code>bit_set</code> se usa en otros hitos, no en estas cuatro funciones matemáticas.</p>
+
+    <div class="note">
+      <span class="note-title">Fidelidad del Makefile</span>
+      <p>El README del hito 2 pide agregar <code>mathlib.c</code> a <code>SRCS</code>. En el Makefile final, <code>mathlib.c</code> aparece dentro de <code>LIB_SRCS</code> porque el hito 11 lo mueve a <code>libutils.a</code>. El objeto sigue siendo <code>build/lib/mathlib.o</code>.</p>
+    </div>
+  </section>
+
+  <section id="factorial">
+    <h2>2. Factorial: un acumulador y dos casos borde</h2>
+
+    <pre><code>int32_t math_factorial(int32_t n) {       // mathlib.c:8
+  int32_t result = 1;                     // mathlib.c:9
+
+  if (n &lt; 0)                              // mathlib.c:11
+    return 0;                             // mathlib.c:12
+
+  for (int32_t i = 2; i &lt;= n; i++)        // mathlib.c:14
+    result *= i;                          // mathlib.c:15
+
+  return result;                          // mathlib.c:17
+}</code></pre>
+
+    <p>El recorrido es corto:</p>
+    <ul>
+      <li><code>result</code> empieza en <code>1</code>, que es el neutro del producto.</li>
+      <li>Si <code>n</code> es negativo, la función devuelve <code>0</code> antes de entrar al bucle.</li>
+      <li>El bucle empieza en <code>i = 2</code> y multiplica mientras <code>i &lt;= n</code>. Para <code>n = 0</code> o <code>n = 1</code> no entra ninguna vez; por eso <code>0!</code> y <code>1!</code> devuelven <code>1</code>.</li>
+      <li>Para <code>n = 5</code>: <code>result</code> pasa por <code>2</code>, <code>6</code>, <code>24</code> y <code>120</code>.</li>
+    </ul>
+
+    <div class="note">
+      <span class="note-title">Un límite real</span>
+      <p>El comentario del header dice que la función «se desborda silenciosamente» para valores grandes. Eso describe el comportamiento esperado en esta implementación, pero el desbordamiento de un entero con signo no es una garantía del lenguaje C. Para la defensa alcanza con decir que el resultado deja de ser confiable cuando <code>n!</code> no cabe en <code>int32_t</code>; no hace falta convertir la demo en una biblioteca de precisión arbitraria.</p>
+    </div>
+  </section>
+
+  <section id="gcd">
+    <h2>3. GCD: Máximo Común Divisor con el algoritmo de Euclides</h2>
+
+    <pre><code>int32_t math_gcd(int32_t a, int32_t b) {  // mathlib.c:20
+  if (a &lt; 0)                               // mathlib.c:21
+    a = -a;                                // mathlib.c:22
+  if (b &lt; 0)                               // mathlib.c:23
+    b = -b;                                // mathlib.c:24
+
+  while (b != 0) {                         // mathlib.c:26
+    int32_t tmp = b;                       // mathlib.c:27
+    b = a % b;                             // mathlib.c:28
+    a = tmp;                               // mathlib.c:29
+  }
+
+  return a;                                // mathlib.c:32
+}</code></pre>
+
+    <p>La función calcula el <strong>Máximo Común Divisor</strong> (GCD, por sus siglas en inglés <em>Greatest Common Divisor</em>). Primero se ignoran los signos: si <code>a</code> o <code>b</code> son negativos, se les cambia el signo. Después, el bucle hace siempre lo mismo: guarda el divisor actual en <code>tmp</code>, calcula el resto en <code>b</code> y mueve el divisor anterior a <code>a</code>. Cuando el resto llega a cero, el último divisor no nulo quedó en <code>a</code>; ese es el Máximo Común Divisor.</p>
+
+    <table>
+      <caption>Traza de <code>math_gcd(48, 18)</code></caption>
+      <thead>
+        <tr><th>Inicio de vuelta</th><th><code>tmp</code></th><th>Nuevo <code>b</code></th><th>Nuevo <code>a</code></th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>a = 48, b = 18</code></td><td><code>18</code></td><td><code>48 % 18 = 12</code></td><td><code>18</code></td></tr>
+        <tr><td><code>a = 18, b = 12</code></td><td><code>12</code></td><td><code>18 % 12 = 6</code></td><td><code>12</code></td></tr>
+        <tr><td><code>a = 12, b = 6</code></td><td><code>6</code></td><td><code>12 % 6 = 0</code></td><td><code>6</code></td></tr>
+        <tr><td><code>a = 6, b = 0</code></td><td>—</td><td>El bucle no entra</td><td>Devuelve <code>6</code></td></tr>
+      </tbody>
+    </table>
+
+    <p>Los ejemplos de la demo son seguros. No se analizan acá todos los extremos de <code>int32_t</code>, como el cambio de signo de <code>INT32_MIN</code>; eso excede el objetivo del hito.</p>
+  </section>
+
+  <section id="isqrt">
+    <h2>4. Raíz entera: aproximaciones de Newton</h2>
+
+    <pre><code>uint32_t math_isqrt(uint32_t n) {         // mathlib.c:35
+  uint32_t x;
+  uint32_t y;
+
+  if (n == 0)                              // mathlib.c:39
+    return 0;                              // mathlib.c:40
+
+  x = n;                                   // mathlib.c:43
+  y = (x + 1) / 2;                         // mathlib.c:44
+  while (y &lt; x) {                           // mathlib.c:45
+    x = y;                                  // mathlib.c:46
+    y = (x + n / x) / 2;                   // mathlib.c:47
+  }
+
+  return x;                                // mathlib.c:50
+}</code></pre>
+
+    <p>Para <code>n = 0</code> devuelve <code>0</code>. Para el resto, empieza con <code>x = n</code> e <code>y = (n + 1) / 2</code>, y repite la aproximación de Newton mientras la nueva <code>y</code> sea menor que <code>x</code>. La división es entera, así que se descarta la parte fraccionaria en cada paso. Cuando <code>y</code> deja de bajar, <code>x</code> ya es la parte entera de la raíz.</p>
+
+    <table>
+      <caption>Traza de <code>math_isqrt(17)</code></caption>
+      <thead>
+        <tr><th><code>x</code></th><th><code>y</code> calculada</th><th>¿Sigue el bucle?</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>17</code></td><td><code>(17 + 1) / 2 = 9</code></td><td>Sí: <code>9 &lt; 17</code></td></tr>
+        <tr><td><code>9</code></td><td><code>(9 + 17 / 9) / 2 = 5</code></td><td>Sí: <code>5 &lt; 9</code></td></tr>
+        <tr><td><code>5</code></td><td><code>(5 + 17 / 5) / 2 = 4</code></td><td>Sí: <code>4 &lt; 5</code></td></tr>
+        <tr><td><code>4</code></td><td><code>(4 + 17 / 4) / 2 = 4</code></td><td>No: <code>4 &lt; 4</code> es falso</td></tr>
+      </tbody>
+    </table>
+
+    <p>La función devuelve <code>4</code>, que es la parte entera de <code>sqrt(17)</code>. No devuelve una aproximación con decimales ni la primera aproximación mayor que la raíz.</p>
+  </section>
+
+  <section id="primos">
+    <h2>5. Primalidad: probar candidatos, no todos</h2>
+
+    <pre><code>int math_is_prime(int32_t n) {            // mathlib.c:53
+  if (n &lt; 2)                               // mathlib.c:54
+    return 0;                              // mathlib.c:55
+  if (n &lt; 4)                               // mathlib.c:56
+    return 1;                              // mathlib.c:57
+  if (n % 2 == 0 || n % 3 == 0)            // mathlib.c:58
+    return 0;                              // mathlib.c:59
+
+  for (int32_t i = 5; (int64_t)i * i &lt;= n; i += 6) {  // mathlib.c:61
+    if (n % i == 0 || n % (i + 2) == 0)    // mathlib.c:62
+      return 0;                            // mathlib.c:63
+  }
+
+  return 1;                                // mathlib.c:66
+}</code></pre>
+
+    <p>Leída por casos:</p>
+    <ul>
+      <li><code>n &lt; 2</code> no es primo: incluye negativos, cero y uno.</li>
+      <li><code>2</code> y <code>3</code> son primos; por eso <code>n &lt; 4</code> devuelve <code>1</code> después de descartar los menores que dos.</li>
+      <li>Si <code>n</code> es par o múltiplo de tres, no es primo (salvo los casos anteriores, que ya se resolvieron).</li>
+      <li>El bucle empieza en <code>5</code>, avanza de seis en seis y prueba <code>i</code> y <code>i + 2</code>: 5 y 7, 11 y 13, 17 y 19, etc. La condición <code>i * i &lt;= n</code> corta cuando ya se probaron todos los divisores posibles.</li>
+      <li>El cast a <code>int64_t</code> se hace antes de multiplicar: si <code>i</code> fuera <code>int32_t</code>, el producto podría desbordarse antes de compararlo con <code>n</code>.</li>
+    </ul>
+
+    <p>Los candidatos <code>6k ± 1</code> son los únicos que pueden ser primos después de descartar 2 y 3, pero no todos son primos. Por ejemplo, <code>25 = 6 · 4 + 1</code> y, sin embargo, <code>25 % 5 == 0</code>. La función no supone que el candidato sea primo: lo prueba con <code>%</code>.</p>
+  </section>
+
+  <section id="demo">
+    <h2>6. La salida de la demo</h2>
+
+    <p>La demo imprime los resultados con <code>print_str</code> y <code>print_dec</code>, no con <code>printf</code>. El hito 2 pide las dos primeras líneas; el hito 3 agrega las otras tres. El <code>demo_math</code> actual ya imprime las cinco:</p>
+
+    <pre><code>factorial(5) = 120
+gcd(48, 18) = 6
+isqrt(17) = 4
+is_prime(17) = 1
+is_prime(18) = 0</code></pre>
+
+    <p><code>print_dec</code> recibe un <code>unsigned int</code>; por eso la demo convierte los resultados con <code>(unsigned int)</code>. Para estos valores la conversión es segura: el factorial negativo devuelve cero, el GCD de valores absolutos no es negativo y la raíz y la primalidad devuelven valores no negativos. No es una regla general para cualquier resultado negativo.</p>
+
+  </section>
+
+  <section id="flags">
+    <h2>7. Las flags del Makefile: quién hace qué</h2>
+
+    <p>Las flags del Makefile no son todas de la misma clase. Unas afectan la <strong>compilación</strong>, otras el <strong>enlace</strong> y otras el <strong>preprocesamiento</strong>. Tampoco son órdenes mágicas: cada una habilita o cambia una parte del proceso, y ninguna demuestra por sí sola que el programa sea correcto.</p>
+
+    <table>
+      <caption>Flags de compilación y enlace del Makefile</caption>
+      <thead>
+        <tr><th>Flag</th><th>Etapa</th><th>Qué hace y qué no promete</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code class="nowrap">-Wall</code></td><td>Compilación</td><td>Activa un conjunto de advertencias frecuentes; no activa todas las advertencias posibles.</td></tr>
+        <tr><td><code class="nowrap">-Wextra</code></td><td>Compilación</td><td>Activa advertencias adicionales a <code>-Wall</code>; no detecta todos los errores lógicos.</td></tr>
+        <tr><td><code class="nowrap">-Werror</code></td><td>Compilación</td><td>Convierte en error cualquier advertencia que haya sido activada; no convierte en error lo que el compilador no diagnosticó.</td></tr>
+        <tr><td><code class="nowrap">-std=c11</code></td><td>Compilación</td><td>Selecciona el estándar ISO C11 (publicado en 2011) como dialecto formal del lenguaje C (soporta características como tipos de ancho fijo estandarizados, <code>_Static_assert</code>, etc.), desactivando extensiones incompatibles del compilador GNU pero permitiendo aquellas que no colisionan con el estándar.</td></tr>
+        <tr><td><code class="nowrap">-g</code></td><td>Compilación</td><td>Incluye información para depuración; no cambia por sí solo la lógica del programa.</td></tr>
+        <tr><td><code class="nowrap">-O0</code></td><td>Compilación</td><td>Es el nivel base de la receta normal, sin las optimizaciones de <code>-O1</code> o <code>-O2</code>; no significa que el compilador no haga ninguna transformación menor.</td></tr>
+        <tr><td><code class="nowrap">-O2</code></td><td>Compilación</td><td>Activa un conjunto de optimizaciones en la receta <code>opt</code>; prioriza velocidad y no garantiza el menor tamaño posible.</td></tr>
+        <tr><td><code class="nowrap">-DNDEBUG</code></td><td>Preprocesamiento</td><td>Define <code>NDEBUG</code>, que desactiva los <code>assert</code> de la biblioteca estándar; no desactiva validaciones propias que no usen <code>assert</code>.</td></tr>
+        <tr><td><code class="nowrap">-ffunction-sections</code></td><td>Compilación</td><td>Pide poner cada función en una sección propia; por sí sola no hace que el linker descarte nada.</td></tr>
+        <tr><td><code class="nowrap">-fdata-sections</code></td><td>Compilación</td><td>Pide poner cada dato o global en una sección propia; por sí sola tampoco descarta secciones.</td></tr>
+        <tr><td><code class="nowrap">-Wl,--gc-sections</code></td><td>Enlace</td><td>Pasa <code>--gc-sections</code> al linker para descartar secciones no referenciadas; no decide si el código es correcto y puede eliminar lo que no tenga referencias.</td></tr>
+      </tbody>
+    </table>
+
+    <p>El Makefile agrupa estas opciones en variables distintas:</p>
+
+    <pre><code>CFLAGS    = -Wall -Wextra -Werror -std=c11 -g -O0
+CFLAGS   += -ffunction-sections -fdata-sections
+OPT_FLAGS = -Wall -Wextra -Werror -std=c11 -O2 -DNDEBUG
+OPT_FLAGS += -ffunction-sections -fdata-sections
+LDFLAGS   = -Wl,--gc-sections</code></pre>
+
+    <p><code>CFLAGS</code> se usa en la receta normal; <code>OPT_FLAGS</code>, en <code>make opt</code> y en los reportes de optimización; <code>LDFLAGS</code>, al linkear. La diferencia entre <code>-O0</code> y <code>-O2</code> no es «sin compilar» frente a «compilar»: en ambos casos se compila, pero cambia cuánto intenta transformar el compilador para mejorar el resultado.</p>
+
+    <p>La distinción entre <code>-ffunction-sections</code> y <code>-Wl,--gc-sections</code> es la más importante para leer el Makefile: la primera da al linker la posibilidad de tratar cada función por separado; la segunda es la que le pide descartar las secciones que no se usan. Una sin la otra no produce el mismo efecto. <code>-Wl,</code> significa «pasá lo que sigue al linker»; <code>--gc-sections</code> es una opción de <code>ld</code>, no de <code>gcc</code>.</p>
+
+    <p>El README pide agregar <code>-Werror</code> desde el hito 2. La lectura correcta es: las advertencias seleccionadas por <code>-Wall</code> y <code>-Wextra</code> pasan a impedir la compilación. Si una advertencia no está activada, <code>-Werror</code> no la convierte en error. Eso no garantiza que no queden errores lógicos.</p>
+
+    <p>Una compilación didáctica con las flags de la receta normal se leería así; no es una línea literal del Makefile:</p>
+
+    <pre><code>$ gcc -Wall -Wextra -Werror -std=c11 -g -O0 \
+    -ffunction-sections -fdata-sections \
+    -Isrc/lib -Isrc/hal -Isrc/demo -Isrc/app -Isrc/platform \
+    -c src/lib/mathlib.c -o build/lib/mathlib.o</code></pre>
+
+    <p>Y el enlace incorpora la opción del linker, por ejemplo:</p>
+
+    <pre><code>$ gcc -Wl,--gc-sections build/app/main.o build/lib/mathlib.o ... \
+    -o build/building_process_demo</code></pre>
+
+    <p>Los puntos suspensivos representan los demás objetos, la plataforma y las bibliotecas que agrega el Makefile; no son una línea literal. Lo importante es que las flags de compilación y las de enlace actúan en momentos distintos.</p>
+  </section>
+
+  <section id="simbolos">
+    <h2>8. Por qué las cuatro funciones aparecen como <code>T</code></h2>
+
+    <p>El hito 2 pide verificar con <code>nm</code> que <code>math_factorial</code> y <code>math_gcd</code> aparecen como <code>T</code>. Al inspeccionar el objeto actual, también aparecen las dos funciones del hito 3:</p>
+
+    <pre><code>$ nm build/lib/mathlib.o
+0000000000000000 T math_factorial
+0000000000000000 T math_gcd
+0000000000000000 T math_is_prime
+0000000000000000 T math_isqrt</code></pre>
+
+    <p><code>T</code> indica una definición en la sección de texto (código) con alcance global. Las cuatro funciones están definidas en <code>mathlib.c</code> sin <code>static</code>, así que son visibles para otros objetos. La minúscula <code>t</code> indicaría una definición local, por ejemplo una función <code>static</code>.</p>
+
+    <p>El consumidor es <code>demo_math.o</code>. Sus referencias aparecen como <code>U</code> porque ese objeto usa las funciones, pero no las define:</p>
+
+    <pre><code>$ nm build/demo/demo_math.o
+0000000000000000 T demo_math
+                 U math_factorial
+                 U math_gcd
+                 U math_is_prime
+                 U math_isqrt
+                 U print_dec
+                 U print_str</code></pre>
+
+    <p>Al linkear, las <code>U</code> de <code>demo_math.o</code> se resuelven con las <code>T</code> de <code>mathlib.o</code>. Es la misma relación consumidor/proveedor del hito 1.</p>
+
+    <p><strong>¿Por qué el header no alcanza para aportar las definiciones?</strong> Porque <code>mathlib.h</code> contiene los prototipos de las cuatro funciones, que le dicen al compilador cómo llamarlas, pero los cuerpos están en <code>mathlib.c</code>. La excepción es <code>bit_set</code>: su cuerpo sí está en el header como <code>static inline</code>, y por eso cada unidad de traducción que lo incluye puede obtener una copia local.</p>
+
+    <h3>Los ceros repetidos: offset dentro de la sección vs. dirección final</h3>
+
+    <p>En la salida de <code>nm</code> sobre un archivo objeto (<code>.o</code>), la primera columna <strong>no es todavía una dirección de memoria RAM</strong>, sino un <strong>desplazamiento u offset dentro de su sección</strong>. Como un <code>.o</code> es un objeto relocalizable, sus funciones no tienen una dirección definitiva asignada: la memoria final del programa recién la determina el linker al generar el ejecutable.</p>
+
+    <p>¿Por qué entonces aparecen todos ceros en <code>mathlib.o</code>? Debido a la opción <strong><code>-ffunction-sections</code></strong>:</p>
+    <ul>
+      <li><strong>Con <code>-ffunction-sections</code> (lo que hace este TP):</strong> el compilador aísla cada función en su propia sección individual (por ejemplo <code>.text.math_factorial</code>, <code>.text.math_gcd</code>, etc.). Dentro de su respectiva sección, cada función comienza en el byte 0. Por eso <code>nm</code> muestra <code>0000000000000000</code> para todas: indica que cada una está en el offset 0 de su propia sección. No significa que vayan a compartir la misma dirección de memoria.</li>
+      <li><strong>Sin <code>-ffunction-sections</code> (compilación tradicional):</strong> todas las funciones del archivo se empaquetarían juntas en una única sección común llamada <code>.text</code>. En ese caso, la primera función estaría en el offset <code>0</code>, pero la segunda empezaría donde termina la primera (por ejemplo en el offset <code>0x43</code>), la tercera en <code>0x86</code>, etc. Por lo tanto, sin esa flag los valores no serían todos cero, sino desplazamientos relativos crecientes dentro de esa única sección <code>.text</code> (pero seguirían sin ser direcciones finales de memoria hasta el linkeo).</li>
+    </ul>
+
+    <p>Para comprobar que cada función tiene su propia sección y tamaños distintos, se puede usar <code>objdump -h</code>:</p>
+
+    <pre><code>$ objdump -h build/lib/mathlib.o
+Idx Name                  Size      VMA               File off
+  3 .text.math_factorial  00000043  0000000000000000  00000040
+  4 .text.math_gcd        00000043  0000000000000000  00000083
+  5 .text.math_isqrt      00000055  0000000000000000  000000c6
+  6 .text.math_is_prime   000000ba  0000000000000000  0000011b</code></pre>
+
+    <p>La columna <code>VMA</code> (<em>Virtual Memory Address</em>) vale cero porque aún no hay direcciones de ejecución asignadas. En cambio, los tamaños (<code>Size</code>) son distintos: <code>0x43</code>, <code>0x43</code>, <code>0x55</code> y <code>0xba</code> bytes. Con <code>nm -S</code> se puede ver el offset (0) junto al tamaño:</p>
+
+    <pre><code>$ nm -S build/lib/mathlib.o
+0000000000000000 0000000000000043 T math_factorial
+0000000000000000 0000000000000043 T math_gcd
+0000000000000000 00000000000000ba T math_is_prime
+0000000000000000 0000000000000055 T math_isqrt</code></pre>
+
+    <p>Recién al linkear, el linker coloca todas esas secciones en el ejecutable y les asigna sus <strong>direcciones finales de memoria</strong>:</p>
+
+    <pre><code>$ nm build/building_process_demo | grep ' math_'
+00000000000018e8 T math_factorial
+000000000000192b T math_gcd
+00000000000019c3 T math_is_prime
+000000000000196e T math_isqrt</code></pre>
+  </section>
+
+  <section id="explicacion">
+    <h2>9. Una explicación oral posible</h2>
+
+    <blockquote>
+      <p>«<code>mathlib.c</code> define cuatro funciones globales: factorial, GCD, raíz entera y primalidad. <code>mathlib.h</code> declara sus prototipos, y <code>demo_math.c</code> las consume e imprime los resultados. Por eso <code>nm build/lib/mathlib.o</code> las muestra como <code>T</code>, mientras que <code>demo_math.o</code> las muestra como <code>U</code> hasta que el linker las resuelve».</p>
+    </blockquote>
+  </section>
+
+  <section id="preguntas">
+    <h2>10. Comprobá lo que aprendiste</h2>
+
+    <form data-quiz>
+      <fieldset data-question>
+        <legend>P1. ¿Qué afirmaciones describen correctamente <code>math_factorial</code>?</legend>
+        <label><input id="q1-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> El acumulador empieza en uno y multiplica desde dos.</label>
+        <label><input id="q1-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> El acumulador comienza en cero y suma cada número.</label>
+        <label><input id="q1-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> Los negativos devuelven cero antes de iniciar el bucle.</label>
+        <label><input id="q1-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> Los valores cero y uno producen siempre resultados cero.</label>
+        <div data-feedback hidden>
+          <p data-verdict></p>
+          <p><strong>Correctas: A y C.</strong> A: <code>result</code> empieza en <code>1</code> y el bucle arranca en <code>2</code>. C: <code>n &lt; 0</code> devuelve <code>0</code> antes del bucle. B es falsa: el acumulador no empieza en cero y la operación es un producto, no una suma. D es falsa: <code>0!</code> y <code>1!</code> devuelven <code>1</code> porque el bucle no se ejecuta. La explicación se limita a entradas pequeñas; el desbordamiento no se analiza como garantía.</p>
+        </div>
+      </fieldset>
+
+      <fieldset data-question>
+        <legend>P2. En <code>math_gcd(48, 18)</code>, ¿qué ocurre en cada iteración?</legend>
+        <label><input id="q2-a" type="checkbox" data-correct="false"> <span class="option-letter">A.</span> Cada iteración reemplaza el primer valor por el resto.</label>
+        <label><input id="q2-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> La variable temporal conserva el divisor anterior del ciclo.</label>
+        <label><input id="q2-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> El bucle termina cuando el divisor llega a cero.</label>
+        <label><input id="q2-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> La función devuelve el valor absoluto de ambos argumentos.</label>
+        <div data-feedback hidden>
+          <p data-verdict></p>
+          <p><strong>Correctas: B y C.</strong> En cada vuelta, <code>tmp</code> guarda el divisor anterior; <code>b</code> pasa a <code>a % b</code>; y <code>a</code> pasa a <code>tmp</code>. El bucle termina cuando <code>b == 0</code>, y entonces <code>a</code> es el último divisor no nulo. Para <code>(48, 18)</code> la cadena es <code>(18, 12)</code>, <code>(12, 6)</code>, <code>(6, 0)</code>, y devuelve <code>6</code>. A invierte los papeles: <code>a</code> no se reemplaza por el resto. D confunde normalizar los signos con devolver el valor absoluto de ambos; lo que devuelve es el GCD.</p>
+        </div>
+      </fieldset>
+
+      <fieldset data-question>
+        <legend>P3. ¿Qué describe el cálculo de <code>math_isqrt(17)</code>?</legend>
+        <label><input id="q3-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> El caso cero devuelve cero antes de iniciar las aproximaciones.</label>
+        <label><input id="q3-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> El bucle se detiene cuando la aproximación supera a n.</label>
+        <label><input id="q3-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> La división entera descarta la parte fraccionaria en cada paso.</label>
+        <label><input id="q3-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> La función devuelve la primera aproximación mayor que la raíz.</label>
+        <div data-feedback hidden>
+          <p data-verdict></p>
+          <p><strong>Correctas: A y C.</strong> A: <code>n == 0</code> devuelve <code>0</code> antes de calcular <code>x</code> e <code>y</code>. C: todas las divisiones son enteras, así que se descarta la parte fraccionaria. B es falsa: el bucle sigue mientras <code>y &lt; x</code>, no mientras <code>y &gt; n</code>. D es falsa: la traza <code>17 → 9 → 5 → 4</code> termina devolviendo la parte entera de la raíz, no una aproximación mayor. La comparación final es <code>4 &lt; 4</code>, que es falsa.</p>
+        </div>
+      </fieldset>
+
+      <fieldset data-question>
+        <legend>P4. ¿Qué afirmaciones describen <code>math_is_prime</code>?</legend>
+        <label><input id="q4-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> Los números menores que dos se descartan siempre de inmediato.</label>
+        <label><input id="q4-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> Los números dos y tres se descartan como no primos.</label>
+        <label><input id="q4-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> El bucle avanza de seis en seis desde el cinco.</label>
+        <label><input id="q4-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> Todo número de forma seis k más uno resulta primo.</label>
+        <div data-feedback hidden>
+          <p data-verdict></p>
+          <p><strong>Correctas: A y C.</strong> A: <code>n &lt; 2</code> devuelve <code>0</code>, así que negativos, cero y uno no se consideran primos. C: el bucle arranca en <code>i = 5</code> y suma <code>6</code>; prueba <code>i</code> e <code>i + 2</code>. B es falsa: <code>2</code> y <code>3</code> devuelven <code>1</code> por el caso <code>n &lt; 4</code>. D es falsa: <code>6k ± 1</code> son candidatos, no una garantía; por ejemplo, <code>25 = 6 · 4 + 1</code> no es primo porque es divisible por <code>5</code>.</p>
+        </div>
+      </fieldset>
+
+      <fieldset data-question>
+        <legend>P5. ¿Qué afirmaciones corresponden a <code>mathlib.o</code> y <code>mathlib.h</code>?</legend>
+        <label><input id="q5-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> La letra T indica una definición global en código.</label>
+        <label><input id="q5-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> La letra t señala un símbolo todavía indefinido aquí.</label>
+        <label><input id="q5-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> El header mathlib.h aporta el cuerpo de cada función.</label>
+        <label><input id="q5-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> El objeto mathlib.o contiene las cuatro definiciones globales esperadas.</label>
+        <div data-feedback hidden>
+          <p data-verdict></p>
+          <p><strong>Correctas: A y D.</strong> A: <code>T</code> indica una definición en la sección de texto con alcance global. D: <code>nm build/lib/mathlib.o</code> muestra las cuatro funciones como <code>T</code>. B es falsa: <code>t</code> indicaría una definición local; <code>U</code> es el símbolo indefinido. C es falsa: <code>mathlib.h</code> contiene los prototipos de las cuatro funciones; los cuerpos están en <code>mathlib.c</code>. La excepción es <code>bit_set</code>, que sí tiene un cuerpo <code>static inline</code> en el header.</p>
+        </div>
+      </fieldset>
+
+      <button type="submit">Comprobar respuestas</button>
+      <p data-quiz-summary role="status" aria-live="polite"></p>
+    </form>
+
+    <p class="source"><span class="note-title">Fuentes primarias recomendadas</span> Consigna del TP3, <a href="../tps/tp3/trabajo_practico/README.md">README.md</a>, hitos 2 y 3; informe extendido, <a href="../tps/tp3/trabajo_practico/INFORME_EXT.md">INFORME_EXT.md</a>, hito 14 sobre los símbolos de <code>mathlib.o</code>; manual oficial de GCC, <a href="https://gcc.gnu.org/onlinedocs/gcc/Warning-Options.html">opciones de advertencia</a>, <a href="https://gcc.gnu.org/onlinedocs/gcc/C-Dialect-Options.html">opciones de dialecto</a>, <a href="https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html">opciones de optimización</a>, <a href="https://gcc.gnu.org/onlinedocs/gcc/Code-Gen-Options.html">opciones de generación de código</a> y <a href="https://gcc.gnu.org/onlinedocs/gcc/Link-Options.html">opciones de enlace</a>; manual oficial de GNU Binutils, <a href="https://sourceware.org/binutils/docs/binutils/nm.html"><code>nm</code></a> y <a href="https://sourceware.org/binutils/docs/binutils/objdump.html"><code>objdump</code></a>; manual oficial de GNU <code>ld</code>, <a href="https://sourceware.org/binutils/docs/ld/Input-Section-Keep.html"><code>--gc-sections</code></a>. Las salidas actuales se obtuvieron de artefactos ya existentes, sin recompilar el TP.</p>
+  </section>
+
+  <nav class="lesson-nav" aria-label="Navegación de la lección">
+    <a href="../index.html">Índice de lecciones</a>
+    <a href="0003-hito-4-strings-con-capacidad-fija.html">Siguiente lección</a>
+    <a href="#mapa">Volver al inicio</a>
+    <a href="../lessons/0001-hito-1-compilar-y-enlazar.html">Lección anterior</a>
+    <a href="#preguntas">Volver al cuestionario</a>
+  </nav>
+</main>
+</body>
+</html>

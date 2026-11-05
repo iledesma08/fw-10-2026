@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Referencia 0001: compilación, enlace y símbolos</title>
+  <link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main>
+  <p class="kicker">Preparación TP3 · Referencia 0001</p>
+  <h1>Compilación, enlace y símbolos</h1>
+
+  <nav aria-label="Secciones de la referencia">
+    <p><strong>En esta hoja:</strong>
+      <a href="#etapas">Etapas</a> ·
+      <a href="#glosario">Glosario</a> ·
+      <a href="#simbolos">Símbolos</a> ·
+      <a href="#recorrido">Recorrido</a> ·
+      <a href="#comandos">Comandos</a>
+    </p>
+  </nav>
+
+  <section id="etapas">
+    <h2>Etapas: de la fuente al ejecutable</h2>
+
+    <p>El camino completo tiene cuatro pasos. <code>gcc</code> puede coordinarlos todos, o detenerse en uno:</p>
+
+    <ol>
+      <li><strong>Preprocesamiento.</strong> Se resuelven <code>#include</code>, macros y directivas; se quitan los comentarios.
+        <ul>
+          <li><strong>Unidad de traducción:</strong> el texto de un <code>.c</code> después de expandir sus <code>#include</code>, sustituir macros y quitar comentarios. Es lo que recibe el compilador; con <code>$ gcc -E archivo.c</code> se puede ver ese estado intermedio en la terminal.</li>
+        </ul>
+      </li>
+      <li><strong>Compilación.</strong> La unidad de traducción se traduce a lenguaje ensamblador.
+        <ul>
+          <li><strong>Lenguaje ensamblador:</strong> representación textual de instrucciones para una arquitectura concreta, por ejemplo x86-64 en el host. Todavía no es código máquina ni un objeto. Al ejecutar <code>$ gcc -S mathlib.c</code> no aparece nada en pantalla porque <code>gcc -S</code> no escribe en la terminal: genera directamente en disco el archivo <code>mathlib.s</code> (si querés volcarlo a la salida estándar como hace <code>-E</code>, podés usar <code>$ gcc -S mathlib.c -o -</code>).</li>
+        </ul>
+      </li>
+      <li><strong>Ensamblado.</strong> El ensamblador produce un objeto relocalizable <code>.o</code>.
+        <ul>
+          <li><strong>Tabla de símbolos:</strong> registro de los nombres que el objeto define o necesita, con información como su sección, valor, tamaño y alcance. Se puede inspeccionar con <code>$ nm archivo.o</code>, <code>$ readelf -s archivo.o</code> o <code>$ objdump -t archivo.o</code>.</li>
+          <li><strong>Relocalizaciones:</strong> anotaciones que marcan posiciones cuyo valor final depende de una dirección que el linker todavía no asignó. Por eso el <code>.o</code> es relocalizable: si se ve una librería o un objeto compilado con Make, por ejemplo <code>mathlib_opt.o</code>, las funciones aún no tienen direcciones definitivas (su valor aparece en cero relativo a su sección). En cambio, al linkear en el ejecutable final (<code>building_process_demo</code>), el linker ubica cada sección en la memoria definitiva y resuelve esas relocalizaciones asignando las direcciones reales.</li>
+        </ul>
+      </li>
+      <li><strong>Enlace.</strong> El linker combina objetos y bibliotecas, resuelve las referencias con sus definiciones y genera el ejecutable.
+        <ul>
+          <li><strong>Objetos:</strong> archivos <code>.o</code> con código, tabla de símbolos y relocalizaciones. En el hito 1: <code>main.o</code>, <code>print.o</code> y <code>print_host.o</code>.</li>
+          <li><strong>Bibliotecas:</strong> colecciones de objetos que el linker consulta para tomar las definiciones que necesita. Una biblioteca estática <code>.a</code> agrupa varios objetos; libc es una biblioteca del sistema. En el hito 1 los objetos de plataforma se pasan directamente y no se usa una biblioteca propia, pero luego (en el hito 11) sí se construye una biblioteca estática propia con extensión <code>.a</code> (<code>libutils.a</code>) que condensa los objetos de <code>src/lib/</code>.</li>
+          <li><strong>Referencias:</strong> usos de símbolos que todavía no tienen definición en el objeto que los usa, como <code>U print_str</code> en <code>main.o</code>. El objeto que usa una referencia que no define se llama <strong>consumidor</strong>, y el que cede o provee esa definición es el <strong>proveedor</strong>. El linker busca la definición compatible del proveedor y ajusta la referencia.</li>
+          <li><strong>Ejecutable:</strong> archivo final con direcciones asignadas, referencias resueltas o preparadas para el cargador dinámico, y un punto de entrada. Es lo que se puede ejecutar.</li>
+        </ul>
+      </li>
+    </ol>
+
+    <pre><code>fuente .c
+  │  preprocesamiento
+  ▼
+unidad de traducción
+  │  compilación
+  ▼
+ensamblador .s
+  │  ensamblado
+  ▼
+objeto .o  ──┐
+objeto .o  ──┼── enlace ──> ejecutable
+objeto .o  ──┘</code></pre>
+
+    <p>La opción <code>-c</code> detiene el proceso antes del enlace. La opción <code>-o</code> nombra la salida de la etapa elegida:</p>
+
+    <pre><code>$ gcc -c archivo.c -o archivo.o
+
+$ gcc archivo.c -o programa        # compila y linkea</code></pre>
+
+    <p><code>-c</code> no significa «solo compilar» en el sentido de saltarse el preprocesamiento o el ensamblado: significa «no linkear».</p>
+
+    <div class="note">
+      <span class="note-title">Para el TP</span>
+      <p>El Makefile usa <code>-c</code> en la regla que produce cada <code>.o</code> (líneas 52–54) y otra receta posterior para linkear. Justamente hacemos que mantenga referencias pendientes para entender qué permite el linkeo.</p>
+    </div>
+  </section>
+
+  <section id="glosario">
+    <h2>Glosario mínimo</h2>
+
+    <table>
+      <caption>Términos que conviene usar con precisión</caption>
+      <thead>
+        <tr><th>Término</th><th>Qué es</th><th>Ejemplo en el TP</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>fuente</strong></td><td>Archivo de código C, como <code>.c</code>.</td><td><code>src/platform/print.c</code></td></tr>
+        <tr><td><strong>unidad de traducción</strong></td><td>Resultado de preprocesar un <code>.c</code> junto con sus headers incluidos.</td><td><code>main.c</code> con <code>print.h</code> y <code>demo.h</code></td></tr>
+        <tr><td><strong>declaración</strong></td><td>Anuncia el nombre y el tipo de algo; un prototipo de función no trae el cuerpo.</td><td><code>void print_str(const char *p);</code> en <code>print.h:23</code></td></tr>
+        <tr><td><strong>definición</strong></td><td>Proporciona el cuerpo de una función o el almacenamiento de una variable.</td><td><code>print_str</code> en <code>print.c:8–11</code></td></tr>
+        <tr><td><strong>header</strong></td><td>Archivo de declaraciones compartidas. Puede contener definiciones <code>static inline</code>; no es una regla universal que solo declare.</td><td><code>print.h</code>; <code>bit_set</code> en <code>mathlib.h</code></td></tr>
+        <tr><td><strong>objeto</strong></td><td>Archivo <code>.o</code> relocalizable: código máquina, tabla de símbolos y relocalizaciones; puede conservar referencias pendientes. No es un ejecutable.</td><td><code>build/platform/print.o</code></td></tr>
+        <tr><td><strong>símbolo</strong></td><td>Nombre registrado en la tabla del objeto, por ejemplo una función o una variable.</td><td><code>print_str</code>, <code>main</code></td></tr>
+        <tr><td><strong>referencia</strong></td><td>Uso de un símbolo. Si el objeto no lo define, queda como indefinido (<code>U</code>) hasta el enlace.</td><td><code>main.o</code>: <code>U print_str</code></td></tr>
+        <tr><td><strong>consumidor</strong></td><td>Objeto que usa un símbolo sin definirlo en ese mismo objeto; en <code>nm</code> aparece como <code>U</code>.</td><td><code>main.o</code> consume <code>print_str</code>; <code>print.o</code> consume <code>print_chr</code>.</td></tr>
+        <tr><td><strong>proveedor</strong></td><td>Objeto o biblioteca que define el símbolo que otro consume; en <code>nm</code> aparece como <code>T</code>, <code>t</code> u otro tipo de definición.</td><td><code>print.o</code> provee <code>print_str</code>; <code>print_host.o</code> provee <code>print_chr</code>.</td></tr>
+        <tr><td><strong>biblioteca</strong></td><td>Archivo que agrupa objetos; el linker toma de allí las definiciones que necesita. Puede ser estática (<code>.a</code>) o compartida (como libc).</td><td>libc aporta <code>putchar</code>; la biblioteca propia del TP aparece en un hito posterior.</td></tr>
+        <tr><td><strong>enlace</strong></td><td>Etapa que combina objetos, resuelve referencias y produce el ejecutable.</td><td><code>$ gcc build/app/main.o build/platform/print.o build/platform/host/print_host.o -o build/building_process_demo</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="simbolos">
+    <h2>Leer <code>nm</code></h2>
+
+    <p><code>nm</code> lista los símbolos de un objeto. Cada línea muestra, según la opción y el formato, el valor, el tipo y el nombre. En el formato por defecto, una mayúscula suele indicar alcance global y una minúscula, alcance local; hay excepciones, y el manual oficial las documenta.</p>
+
+    <table>
+      <caption>Tipos que aparecen en esta lección</caption>
+      <thead>
+        <tr><th>Letra</th><th>Significado</th><th>Lectura en el TP</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>U</code></td><td>Indefinido en ese objeto: el símbolo se usa, pero no se define allí.</td><td><code>main.o</code> usa <code>print_str</code>; la definición está en otro objeto.</td></tr>
+        <tr><td><code>T</code></td><td>Definido en la sección de texto (código), con alcance global.</td><td><code>print.o</code> define <code>print_str</code> (y las demás funciones de la app: <code>math_factorial</code>, <code>demo_math</code>, etc.).</td></tr>
+        <tr><td><code>t</code></td><td>Definido en la sección de texto, con alcance local (por ejemplo, una función <code>static</code>).</td><td>No hay en este TP (todas las funciones de los <code>.c</code> son globales <code>T</code>; solo puede aparecer una copia local <code>t bit_set</code> en <code>hal_uart.o</code> si el compilador no inlinea la función <code>static inline</code> del header).</td></tr>
+        <tr><td><span class="nowrap"><code>R</code>/<code>r</code></span></td><td>Datos de solo lectura; minúscula si el símbolo es local.</td><td><code>main.o</code> actual: <code>r PROGRAM_NAME</code>.</td></tr>
+        <tr><td><span class="nowrap"><code>D</code>/<code>d</code></span></td><td>Datos inicializados; minúscula si el símbolo es local.</td><td>No hay en este TP (el código de la app no declara variables globales o estáticas inicializadas con valor distinto de cero; solo el runtime ELF aporta símbolos internos al linkear).</td></tr>
+        <tr><td><span class="nowrap"><code>B</code>/<code>b</code></span></td><td>Datos sin inicializar o inicializados en cero (BSS).</td><td>Variables estáticas del TP: <code>sim_uart</code>, <code>sim_ring</code> (en <code>demo_embedded.c</code>) y <code>timer_ms</code> (en <code>hal_timer.c</code>).</td></tr>
+      </tbody>
+    </table>
+
+    <p>Cuando <code>main.o</code> muestra <code>U print_str</code>, es <strong>consumidor</strong> de ese símbolo: lo usa, pero no lo define. <code>print.o</code> es su <strong>proveedor</strong>: contiene la definición. Un mismo objeto puede ser ambas cosas para símbolos distintos: <code>print.o</code> provee <code>print_str</code> y consume <code>print_chr</code>; <code>print_host.o</code> provee <code>print_chr</code> y consume <code>putchar</code> de libc. El enlace conecta cada <code>U</code> del consumidor con una definición del proveedor.</p>
+
+    <p>Opciones útiles para acotar la salida:</p>
+
+    <pre><code>$ nm build/app/main.o              # todos los símbolos
+$ nm -u build/app/main.o           # solo los indefinidos
+$ nm --defined-only build/platform/print.o   # solo los definidos
+0000000000000000 T print_dec
+0000000000000000 T print_hex
+0000000000000000 T print_str</code></pre>
+
+    <h3>Por qué un <code>U</code> puede seguir en el ejecutable</h3>
+
+    <p>En un objeto, <code>U</code> es una referencia pendiente. Al linkear pueden pasar dos cosas:</p>
+
+    <ul>
+      <li>Si otro objeto o un miembro de una biblioteca define el símbolo, el enlace lo resuelve y el ejecutable muestra una definición, por ejemplo <code>T print_str</code>.</li>
+      <li>Si el símbolo es una importación de una biblioteca compartida, el ejecutable puede conservar <code>U</code>: el cargador dinámico lo resuelve al iniciar el programa. Eso no es un error de enlace.</li>
+    </ul>
+
+    <pre><code>$ nm build/building_process_demo | grep ' U '
+                 U __ctype_b_loc@GLIBC_2.3
+                 U __libc_start_main@GLIBC_2.34
+                 U putchar@GLIBC_2.2.5
+                 U __stack_chk_fail@GLIBC_2.4
+                 U strcmp@GLIBC_2.2.5
+
+$ nm build/building_process_demo | grep print_str
+000000000000177c T print_str</code></pre>
+
+    <p>Interpretación: <code>putchar</code> y <code>strcmp</code> siguen como <code>U</code> porque sus definiciones están en libc, que se carga dinámicamente. En cambio, <code>print_str</code> ya aparece como <code>T print_str</code>: el enlace resolvió la referencia de <code>main.o</code> con la definición de <code>print.o</code>. Un <code>U</code> final no siempre es un fallo; depende de qué biblioteca deba aportar la definición y de cómo se linkee.</p>
+
+    <p class="source">Los nombres con <code>@GLIBC_...</code> indican la versión del símbolo importado.</p>
+
+    <h3><code>static inline</code> en un header: el caso de <code>bit_set</code></h3>
+
+    <p><code>mathlib.h:49–51</code> contiene una definición, no solo una declaración:</p>
+
+    <pre><code>static inline uint32_t bit_set(uint32_t reg, uint8_t bit) {
+  return reg | (1U &lt;&lt; bit);
+}</code></pre>
+
+    <p><strong>Qué efecto tiene <code>static</code>:</strong> le da enlace interno. Cada unidad de traducción que incluye el header recibe su propia copia de la función; esa copia no se exporta como símbolo global y no produce un conflicto de definición múltiple al linkear varios objetos. <strong>Qué efecto tiene <code>inline</code>:</strong> es una sugerencia para que el compilador sustituya la llamada por el cuerpo; no garantiza que siempre lo haga. Si no la incrusta, puede emitir una copia local de la función.</p>
+
+    <p>En el objeto actual de <code>hal_uart.o</code>, que usa <code>bit_set</code>, se ve esa copia local:</p>
+
+    <pre><code>$ nm build/hal/hal_uart.o | grep bit_set
+0000000000000000 t bit_set</code></pre>
+
+    <p>La <code>t</code> minúscula indica una definición local de ese objeto, no una <code>U</code> que el linker deba resolver con otro archivo. En una compilación con más optimización podría no aparecer si el compilador incrusta todas las llamadas; la ausencia del símbolo no demuestra por sí sola que la función no exista.</p>
+
+    <p>La frase «para <code>print.h</code> sí vale la separación entre prototipo y cuerpo» significa que <code>print.h</code> contiene solo declaraciones como <code>void print_str(const char *p);</code>, sin el cuerpo. Incluirlo permite compilar la llamada, pero no aporta la implementación: por eso <code>print.o</code> sigue siendo necesario y <code>main.o</code> conserva <code>U print_str</code> hasta el enlace. La aclaración es necesaria porque no todos los headers del TP son así: <code>mathlib.h</code> sí incluye un cuerpo <code>static inline</code>.</p>
+
+    <h3>Inlining: cuándo ahorra y cuándo no</h3>
+
+    <p>Inlinear reemplaza una llamada por el cuerpo de la función. Si la función es chica y las llamadas usan constantes, el compilador puede eliminar la llamada, el retorno y parte del cálculo; por ejemplo, <code>bit_set(reg, 13)</code> puede quedar como un <code>OR</code> con una máscara constante. Si además la función se inlinea en todos sus usos y nadie toma su dirección, la copia separada queda sin referencias y puede descartarse al linkear.</p>
+
+    <p>Pero no siempre ahorra: inlinear duplica el cuerpo en cada llamada. Una función grande o usada en muchos lugares puede hacer crecer <code>text</code>. De hecho, el reporte del hito 12 muestra que <code>strbuf_append</code> inlineado en <code>strbuf_append_int</code> tiene un cambio neto de <strong>+9 bytes</strong>. La reducción total de <code>text</code> es el balance de todas las optimizaciones, no una garantía de que cada inlining achique. <code>-O2</code> prioriza velocidad; <code>-Os</code> prioriza tamaño.</p>
+
+    <p>Por eso el compilador no inlinea todo: el código puede crecer demasiado, empeorar la caché de instrucciones, y hay casos que limitan la decisión —funciones recursivas, llamadas indirectas por puntero, funciones externas que deben conservar una copia para otros usuarios o la ABI, y llamadas entre archivos sin LTO—. <code>inline</code> es una sugerencia, no una orden.</p>
+
+    <div class="note">
+      <span class="note-title">Otro límite de la lectura</span>
+      <p><code>T</code> describe una definición en el objeto, no una garantía de que la función quede en el ejecutable final: el linker puede descartar secciones no usadas. Esa distinción se trabaja más adelante.</p>
+    </div>
+  </section>
+
+  <section id="recorrido">
+    <h2>El recorrido del hito 1</h2>
+
+    <p>La pregunta del hito 1 es dónde está <code>print_str</code>. La respuesta es <code>build/platform/print.o</code>, generado desde <code>src/platform/print.c</code>. Pero la cadena no termina ahí: <code>print.o</code> necesita <code>print_chr</code>, que provee el backend de la plataforma.</p>
+
+    <table>
+      <caption>Cadena de objetos y símbolos</caption>
+      <thead>
+        <tr><th>Paso</th><th>Objeto</th><th>Salida relevante</th><th>Lectura</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1</td>
+          <td><code>main.o</code> (hito 1)</td>
+          <td><code>T main</code>, <code>U print_str</code></td>
+          <td><code>main</code> está definido; <code>print_str</code> se referencia pero no se define.</td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td><code>print.o</code></td>
+          <td><code>T print_str</code>, <code>U print_chr</code></td>
+          <td><code>print_str</code> queda definida; ahora falta <code>print_chr</code>.</td>
+        </tr>
+        <tr>
+          <td>3</td>
+          <td><code class="nowrap">print_host.o</code></td>
+          <td><code>T print_chr</code>, <code>U putchar</code>, <code>U stdout</code></td>
+          <td><code>print_chr</code> queda definida; las referencias restantes son de libc.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Por qué se linkean los objetos de plataforma</h3>
+
+    <p>La separación no es solo administrativa. <code>print.c</code> implementa el formato y llama a <code>print_chr</code>, pero no sabe si la salida es la consola del host, una UART o un registro de hardware. Ese conocimiento vive en el backend de la plataforma. Por eso <code>print.o</code> puede conservar <code>U print_chr</code>: el mismo código portable se compila para la plataforma elegida y, al linkear, se incorpora el backend que define <code>print_chr</code>. Cambiar <code>PLATFORM</code> cambia qué archivo de plataforma se compila y linkea, sin tocar la aplicación ni la lógica portable. Esa es la utilidad de dejar una referencia sin definir hasta el enlace.</p>
+
+    <p>La lista de plataforma es independiente de <code>SRCS</code>. En el Makefile actual (líneas 30–38):</p>
+
+    <pre><code>PLATFORM      = host
+PLATFORM_SRCS = src/platform/print.c $(wildcard src/platform/$(PLATFORM)/*.c)
+PLATFORM_OBJS = $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(PLATFORM_SRCS))</code></pre>
+
+    <p>La receta de enlace del target incluye <code>$(PLATFORM_OBJS)</code> además de los objetos de la aplicación (líneas 65–66 en la versión actual; la receta tiene además piezas de hitos posteriores). Por eso <code>print.o</code> y <code>print_host.o</code> llegan al ejecutable aunque no estén en <code>SRCS</code>.</p>
+
+    <table>
+      <caption>Cómo se separan las listas del Makefile</caption>
+      <thead>
+        <tr><th>Variable</th><th>Qué contiene</th><th>Se convierte en</th><th>En el hito 1</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>SRCS</code></td>
+          <td>Fuentes de la aplicación y las demos.</td>
+          <td><code>OBJS</code></td>
+          <td><code>src/app/main.c</code></td>
+        </tr>
+        <tr>
+          <td><code>OBJS</code></td>
+          <td>Objetos producidos por <code>SRCS</code>.</td>
+          <td>Se pasan a la receta de enlace.</td>
+          <td><code>build/app/main.o</code></td>
+        </tr>
+        <tr>
+          <td><code>PLATFORM_SRCS</code></td>
+          <td><code>src/platform/print.c</code> más todos los <code>.c</code> del backend elegido por <code>PLATFORM</code>.</td>
+          <td><code>PLATFORM_OBJS</code></td>
+          <td><code>print.c</code> y <code>host/print_host.c</code></td>
+        </tr>
+        <tr>
+          <td><code>PLATFORM_OBJS</code></td>
+          <td>Objetos producidos por <code>PLATFORM_SRCS</code>.</td>
+          <td>Se pasan a la receta de enlace.</td>
+          <td><code>print.o</code> y <code>print_host.o</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p><code>SRCS</code> y <code>PLATFORM_SRCS</code> son listas separadas: la plataforma no está dentro de <code>SRCS</code>. En el hito 1 <code>SRCS</code> tenía solo <code>main.c</code>; hoy incluye también las demos. La receta de enlace usa los objetos de la aplicación y <code>PLATFORM_OBJS</code>.</p>
+
+    <p>La regla que compila cada objeto es <code>Makefile:52–54</code>:</p>
+
+    <pre><code>$(BUILD_DIR)/%.o: src/%.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $&lt; -o $@</code></pre>
+
+    <p>Allí <code>$&lt;</code> es la fuente, <code>$@</code> el objeto de destino, <code>-c</code> detiene antes del enlace y <code>-o</code> nombra la salida. Una expansión concreta sería:</p>
+
+    <pre><code>$ gcc -Wall -Wextra -Werror -std=c11 -g -O0 \
+    -ffunction-sections -fdata-sections \
+    -Isrc/lib -Isrc/hal -Isrc/demo -Isrc/app -Isrc/platform \
+    -c src/platform/print.c -o build/platform/print.o</code></pre>
+
+    <p>Es un ejemplo didáctico, no una línea literal del Makefile.</p>
+  </section>
+
+  <section id="comandos">
+    <h2>Comandos de la lección</h2>
+
+    <table>
+      <caption>Qué pedir y qué mirar</caption>
+      <thead>
+        <tr><th>Comando</th><th>Para qué sirve</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>$ make</code></td><td>Construir el proyecto con las recetas del Makefile. No compila por sí mismo: decide qué <code>gcc</code> ejecutar.</td></tr>
+        <tr><td><code>$ gcc -c archivo.c -o archivo.o</code></td><td>Compilar y ensamblar sin linkear; produce un objeto.</td></tr>
+        <tr><td><code>$ nm build/app/main.o</code></td><td>Ver que <code>main</code> está definido (<code>T</code>) y <code>print_str</code> queda indefinida (<code>U</code>).</td></tr>
+        <tr><td><code>$ nm build/platform/print.o</code></td><td>Ver que <code>print_str</code> está definida y que <code>print_chr</code> queda pendiente.</td></tr>
+        <tr><td><code>$ nm build/platform/host/print_host.o</code></td><td>Ver que <code>print_chr</code> está definida y que quedan referencias a libc.</td></tr>
+        <tr><td><code>$ nm -u build/app/main.o</code></td><td>Listar solo las referencias sin definir del consumidor.</td></tr>
+        <tr><td><code>$ nm --defined-only build/platform/print.o</code></td><td>Listar solo las definiciones del proveedor.</td></tr>
+        <tr><td><code>$ size build/building_process_demo</code></td><td>Ver el resumen de <code>text</code>, <code>data</code>, <code>bss</code> y <code>dec</code>. Es un resumen de secciones, no el tamaño del archivo; su interpretación de optimización corresponde al hito 12.</td></tr>
+      </tbody>
+    </table>
+
+    <p>En esta tabla, el <strong>consumidor</strong> es el objeto que deja el símbolo como <code>U</code>; el <strong>proveedor</strong> es el que lo define como <code>T</code> o <code>t</code>. Un mismo objeto puede ocupar los dos papeles para símbolos distintos.</p>
+
+    <p>Salida de <code>size</code> sobre el ejecutable:</p>
+
+    <pre><code>   text    data     bss     dec     hex filename
+   7200     616     112    7928    1ef8 build/building_process_demo</code></pre>
+  </section>
+
+  <p class="source"><span class="note-title">Fuentes</span> Manual oficial de GCC, <a href="https://gcc.gnu.org/onlinedocs/gcc/Overall-Options.html">Overall Options</a> (etapas, <code>-c</code>, <code>-o</code>) e <a href="https://gcc.gnu.org/onlinedocs/gcc/Inline.html">Inline Functions In C</a> (<code>static inline</code> y enlace interno); manual oficial de GNU Binutils, <a href="https://sourceware.org/binutils/docs/binutils/nm.html"><code>nm</code></a> (tipos de símbolos y opciones); informe extendido del TP, <a href="../tps/tp3/trabajo_practico/INFORME_EXT.md">INFORME_EXT.md</a>, líneas 3–89 (salidas declaradas del hito 1) y hito 12 (reporte de optimización).</p>
+
+  <nav class="lesson-nav" aria-label="Navegación de la referencia">
+    <a href="../index.html">Índice de lecciones</a>
+    <a href="../lessons/0001-hito-1-compilar-y-enlazar.html">Volver a la lección 0001</a>
+    <a href="0002-secciones-de-memoria-y-layout.html">Referencia 0002: Secciones de memoria</a>
+    <a href="../lessons/0002-hitos-2-3-matematica-y-simbolos.html">Lección siguiente</a>
+  </nav>
+</main>
+</body>
+</html>

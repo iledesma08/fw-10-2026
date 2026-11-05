@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hito 5: trim y CRC-8</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+</head>
+<body>
+<main>
+  <p class="kicker">Preparación TP3 · Lección 0004</p>
+  <h1>Hito 5: trim y CRC-8</h1>
+  <p class="lead">Al terminar vas a poder explicar por qué la demo imprime <code>trimmed: 'hello'</code> y <code>crc8: 0x32</code>: qué caracteres recorta, cuántos bytes procesa y qué operaciones hace sobre ellos.</p>
+
+  <div class="note">
+    <span class="note-title">Puente con la lección anterior</span>
+    <p><strong>Capacidad</strong> es cuánto cabe; <strong>longitud</strong> es cuánto texto hay. En el buffer anterior, la capacidad del array sigue siendo 128 aunque <code>len</code> valga 8. Ahora <code>str_trim</code> recibe la capacidad por separado y devuelve la longitud que realmente copió, sin contar el NUL.</p>
+    <p>Seguimos el código real del hito 5, sin modificar ni recompilar el TP. Las trazas son cálculos del algoritmo, no una nueva ejecución del binario.</p>
+  </div>
+
+  <section id="trim">
+    <h2>1. Trim: quitar blancos de los extremos</h2>
+    <p><code>str_trim(dst, src, max_len)</code> lee el string <code>src</code> y copia su parte útil a <code>dst</code>. Quita blancos al principio y al final, <strong>no los blancos interiores</strong>: <code>"  hola mundo  "</code> queda <code>"hola mundo"</code>, no <code>"holamundo"</code>.</p>
+    <pre><code>// strutils.c:76–96
+size_t str_trim(char *dst, const char *src, size_t max_len) {
+  size_t start = 0;
+  size_t end;
+  size_t len;
+
+  if (max_len == 0)
+    return 0;
+
+  while (src[start] != '\0' &amp;&amp; isspace((unsigned char)src[start]))
+    start++;
+
+  end = start;
+  while (src[end] != '\0')
+    end++;
+
+  while (end &gt; start &amp;&amp; isspace((unsigned char)src[end - 1]))
+    end--;
+
+  len = end - start;
+  if (len &gt; max_len - 1)
+    len = max_len - 1;</code></pre>
+    <p>Son tres recorridos: <code>start</code> avanza sobre los blancos iniciales; <code>end</code> avanza hasta el NUL; después retrocede sobre los blancos finales. El intervalo útil es <code>[start, end)</code>: incluye <code>start</code> y excluye <code>end</code>. Por eso su longitud es <code>end - start</code> y se inspecciona <code>src[end - 1]</code> para retroceder.</p>
+    <pre><code>src = "  hello  "
+índice     0   1   2   3   4   5   6   7   8    9
+carácter  ' ' ' ' 'h' 'e' 'l' 'l' 'o' ' ' ' ' '\0'
+
+start: 0 → 1 → 2          primer carácter no blanco
+end:   2 → ... → 9        posición del NUL
+end:   9 → 8 → 7          excluye los blancos finales
+texto útil: índices 2 a 6; longitud = 7 - 2 = 5</code></pre>
+    <p><code>isspace</code>, de <code>&lt;ctype.h&gt;</code>, reconoce blancos: no solo espacio, también tabulación y saltos de línea, entre otros. Su clasificación depende de la configuración regional. El cast a <code>unsigned char</code> evita pasarle un valor negativo inválido si el tipo <code>char</code> tiene signo; la función admite valores representables como <code>unsigned char</code> o <code>EOF</code>.</p>
+    <p>La condición <code>end &gt; start</code> impide retroceder más allá del inicio útil. Para un origen vacío o compuesto solo por blancos, ambos índices terminan iguales y la longitud útil es cero.</p>
+  </section>
+
+  <section id="capacidad">
+    <h2>2. Copiar sin olvidar el terminador</h2>
+    <pre><code>// strutils.c:98–104 (incluye el cierre de la función)
+  /* Copia acotada al tamano de dst, como strncpy pero sin rellenar */
+  for (size_t i = 0; i &lt; len; i++)
+    dst[i] = src[start + i];
+  dst[len] = '\0';
+
+  return len;
+}</code></pre>
+    <p>Antes de copiar se limita <code>len</code> a <code>max_len - 1</code>. La capacidad incluye el lugar del NUL; el retorno no. Si el texto útil no cabe, se copia solo su prefijo. No se devuelve necesariamente toda la longitud útil del origen, sino la longitud <strong>efectivamente copiada</strong>.</p>
+    <table>
+      <caption>El mismo origen: "  hello  "</caption>
+      <thead><tr><th>max_len</th><th>Destino después</th><th>Retorno</th><th>Qué ocurrió</th></tr></thead>
+      <tbody>
+        <tr><td><code>128</code></td><td><code>"hello"</code></td><td><code>5</code></td><td>Copia completa; NUL en 5.</td></tr>
+        <tr><td><code>4</code></td><td><code>"hel"</code></td><td><code>3</code></td><td>Trunca; reserva el índice 3 para NUL.</td></tr>
+        <tr><td><code>1</code></td><td><code>""</code></td><td><code>0</code></td><td>Solo cabe el NUL en 0.</td></tr>
+        <tr><td><code>0</code></td><td>No se modifica.</td><td><code>0</code></td><td>Retorna antes de leer o escribir.</td></tr>
+      </tbody>
+    </table>
+    <p>Con capacidad cero no se promete un string terminado: <strong>no se escribe nada</strong>. El retorno temprano también evita calcular <code>max_len - 1</code> con cero en un tipo sin signo.</p>
+    <div class="note">
+      <span class="note-title">Un límite no valida la memoria</span>
+      <p>Si la capacidad es positiva, el llamador debe aportar un destino válido de al menos <code>max_len</code> bytes y un origen válido terminado en NUL. La demo usa arrays separados; no hay que asumir que cualquier solapamiento entre origen y destino está soportado.</p>
+    </div>
+  </section>
+
+  <section id="crc">
+    <h2>3. CRC-8: un resumen de ocho bits</h2>
+    <h3>Qué problema real resuelve</h3>
+    <p>Imaginá que un dispositivo envía cuatro bytes por una UART y el ruido eléctrico cambia un bit durante la transmisión:</p>
+    <pre><code>Emisor                         Receptor
+01 02 03 04  ────────────────►  01 02 03 05</code></pre>
+    <p>El receptor recibió cuatro bytes válidos, pero no los que se enviaron. Para ayudarlo a detectar esa alteración, el emisor calcula un dato de control a partir del mensaje: el <strong>CRC</strong> (control de redundancia cíclica). Con el algoritmo del TP, el CRC de <code>01 02 03 04</code> es <code>32</code> hexadecimal. Un protocolo podría transmitir:</p>
+    <pre><code>01 02 03 04 | 32
+   datos     CRC de control</code></pre>
+    <p>El receptor calcula otra vez el CRC de los datos que recibió y lo compara con el CRC recibido:</p>
+    <ul>
+      <li><strong>Distintos:</strong> detectó una alteración de los datos o del valor de control.</li>
+      <li><strong>Iguales:</strong> no detectó una alteración; no es una garantía absoluta.</li>
+    </ul>
+    <p>Por eso sirve en comunicaciones y en comprobaciones de datos almacenados. El CRC <strong>no contiene el mensaje ni permite reconstruirlo</strong>: ayuda a comprobar su integridad. Un protocolo puede decidir descartar un mensaje que falla y pedir que se reenvíe; el CRC por sí solo no hace eso ni corrige los datos.</p>
+    <div class="note">
+      <span class="note-title">Qué hace y qué no hace tu TP</span>
+      <p>En este hito solo se calcula e imprime el CRC. No se implementa el envío del mensaje con su CRC, la recepción ni la comparación. La UART del ejemplo explica una utilidad posible, no una conexión que ya exista entre estas demos.</p>
+    </div>
+
+    <h3>Por qué no sumar simplemente los bytes</h3>
+    <p>Una suma también podría usarse como control sencillo, pero pierde información importante. Por ejemplo, <code>01 02</code> y <code>02 01</code> suman ambos <code>03</code>: cambió el orden y la suma no se enteró. El CRC mezcla los bits teniendo en cuenta su posición y orden; su estructura matemática permite detectar determinadas clases de errores de bits y ráfagas de errores.</p>
+    <p>No significa que detecte cualquier cambio. Un CRC de ocho bits tiene solo 256 resultados posibles, así que dos entradas distintas pueden coincidir. <strong>No cifra los datos ni prueba autenticidad</strong>: alguien que cambia deliberadamente el mensaje también puede recalcular su CRC.</p>
+
+    <h3>De dónde salen los desplazamientos y el XOR</h3>
+    <p><strong>No son pasos arbitrarios: implementan una división matemática en aritmética de polinomios (módulo 2). El CRC es el resto de esa división.</strong> Los bits se interpretan como coeficientes de un polinomio (usando 0 y 1). En esta aritmética, sumar y restar son idénticos y equivalen a la operación <strong>XOR</strong>, sin acarreo. Por eso aparece XOR: cumple el papel de la resta en cada paso de la división larga.</p>
+
+    <h4>¿Cómo es que el término x⁸ está implícito?</h4>
+    <p>El polinomio generador completo es <code>x⁸ + x² + x + 1</code>. En binario tiene <strong>9 coeficientes</strong> (bits 8 al 0): <code>1 0000 0111</code> (<code>0x107</code> en hexadecimal). Sin embargo, la variable <code>crc</code> es de 8 bits (<code>uint8_t</code>), por lo que solo puede almacenar del bit 0 al bit 7.</p>
+    <p>En el código se maneja así:</p>
+    <ul>
+      <li>La condición <code>if (crc &amp; 0x80)</code> revisa si el bit 7 (el bit más alto del byte) es <code>1</code>.</li>
+      <li>Al hacer <code>crc &lt;&lt; 1</code>, ese <code>1</code> se desplazaría hipotéticamente a la posición del bit 8 (generando un número de 9 bits: <code>1 ...</code>).</li>
+      <li>En la división polinómica, como el bit más alto es <code>1</code>, se resta (hace XOR) con el polinomio divisor (<code>1 0000 0111</code>).</li>
+      <li>En el bit 8 ocurre: <code>1 ^ 1 = 0</code>. <strong>Ese bit 8 siempre se cancela a cero por definición de la división</strong>.</li>
+    </ul>
+    <p>Dado que el bit 8 siempre resulta en cero, <strong>no hace falta guardarlo ni computarlo</strong>: se descarta de forma natural al truncar el resultado a 8 bits (<code>uint8_t</code>), y el XOR solo necesita aplicarse sobre los 8 bits restantes (<code>x² + x + 1</code>, es decir, <code>0x07</code>). El término <code>x⁸</code> queda entonces <strong>implícito en el testeo del bit alto y el desplazamiento</strong>.</p>
+
+    <p>Pensá en <code>crc</code> como un <strong>estado de ocho bits que resume lo procesado hasta ahora</strong>. Incorporar un byte, desplazar y aplicar la corrección polinómica actualiza ese estado; conservarlo entre bytes hace que el resultado dependa de todo el mensaje, no solo del último byte.</p>
+
+    <h4>¿Por qué no conviene atribuirle un nombre estándar solo por el polinomio?</h4>
+    <p>Un algoritmo de CRC no está definido únicamente por su polinomio. El estándar de parametrización de CRC (modelo de Rocksoft) especifica que para que dos implementaciones den exactamente el mismo resultado deben coincidir en varios parámetros:</p>
+    <ul>
+      <li><strong>Polinomio generador</strong> (aquí <code>0x07</code>).</li>
+      <li><strong>Valor inicial (Init)</strong>: el estado antes de empezar (aquí <code>0xFF</code>).</li>
+      <li><strong>Reflexión de entrada (RefIn)</strong>: si los bits de cada byte se leen invertidos (LSB first) o normales (MSB first, como hace este TP).</li>
+      <li><strong>Reflexión de salida (RefOut)</strong>: si los bits del CRC final se invierten.</li>
+      <li><strong>XOR final (XorOut)</strong>: valor con el que se hace XOR al final antes de retornar (aquí <code>0x00</code>).</li>
+    </ul>
+    <p>Existen múltiples estándares reconocidos en la industria que usan exactamente el polinomio <code>0x07</code> (por ejemplo, <em>CRC-8/SMBus</em>, <em>CRC-8/AUTOSAR</em> o <em>CRC-8/ITU</em>). Sin embargo, <strong>CRC-8/SMBus utiliza un valor inicial de <code>0x00</code></strong> (mientras que el TP usa <code>0xFF</code>), y <em>CRC-8/AUTOSAR</em> usa un XOR final de <code>0xFF</code>. Si llamáramos «SMBus» a esta función solo por tener el polinomio <code>0x07</code>, estaríamos cometiendo un error técnico: sobre los mismos datos producirían resultados totalmente diferentes.</p>
+    <p>Por eso se aclara que <strong>emisor y receptor deben compartir todos los parámetros</strong> (polinomio, estado inicial, orden de bits y tratamiento final); coincidir solo en el polinomio no garantiza compatibilidad.</p>
+
+    <h3>Cómo se traduce esa idea al código</h3>
+    <pre><code>uint8_t str_crc8(const uint8_t *data, size_t len) {
+  uint8_t crc = STR_CRC8_INIT;  // strutils.h:19: 0xFF
+
+  for (size_t i = 0; i &lt; len; i++) {
+    crc ^= data[i];
+    for (uint8_t bit = 0; bit &lt; 8; bit++) {
+      if ((crc &amp; 0x80U) != 0U)
+        crc = (uint8_t)((crc &lt;&lt; 1) ^ 0x07U);
+      else
+        crc = (uint8_t)(crc &lt;&lt; 1);
+    }
+  }
+
+  return crc;
+}</code></pre>
+    <table>
+      <caption>Las operaciones, leídas de a una</caption>
+      <thead><tr><th>Expresión</th><th>Qué hace</th></tr></thead>
+      <tbody>
+        <tr><td><code>0xFF</code></td><td>Hexadecimal: <code>11111111</code> en binario, 255 en decimal. Estado inicial, no un byte agregado al mensaje.</td></tr>
+        <tr><td><code>crc ^= data[i]</code></td><td>Incorpora el siguiente byte al estado. Equivale a <code>crc = crc ^ data[i]</code>. XOR compara cada par de bits: iguales dan 0; distintos dan 1. No es una suma con acarreo.</td></tr>
+        <tr><td><code>crc &amp; 0x80U</code></td><td>Decide si el siguiente paso de la división necesita la corrección polinómica. La máscara <code>10000000</code> deja solo el bit más alto. Si el resultado no es cero, ese bit estaba encendido.</td></tr>
+        <tr><td><code>crc &lt;&lt; 1</code></td><td>Hace avanzar el procesamiento una posición: desplaza los bits a la izquierda y agrega un cero abajo. El cast a <code>uint8_t</code> conserva los ocho bits bajos del resultado.</td></tr>
+        <tr><td><code>^ 0x07U</code></td><td>Aplica la corrección polinómica si el bit alto anterior era 1. <code>0x07</code> representa los coeficientes inferiores de <code>x⁸ + x² + x + 1</code>. El término <code>x⁸</code> siempre se cancela a cero ($1 \oplus 1 = 0$) y queda implícito al conservar 8 bits.</td></tr>
+      </tbody>
+    </table>
+    <p>El sufijo <code>U</code> marca constantes sin signo. La decisión sobre el bit alto se toma <strong>antes</strong> del desplazamiento. Se hacen ocho vueltas por byte de entrada, no ocho vueltas en total.</p>
+    <p><code>data</code> no tiene por qué ser un string: puede contener bytes cero. La función procesa exactamente <code>len</code> bytes, sin buscar NUL. Para <code>len = 0</code>, el bucle no entra y devuelve el estado inicial <code>0xFF</code>.</p>
+    <div class="note">
+      <span class="note-title">La idea que conviene llevarse</span>
+      <p>El CRC sirve para detectar alteraciones. Sus desplazamientos y XOR son una forma eficiente de calcular un resto matemático diseñado para ese propósito.</p>
+    </div>
+  </section>
+
+  <section id="traza">
+    <h2>4. De cuatro bytes a 0x32</h2>
+    <p>La demo usa <code>{0x01, 0x02, 0x03, 0x04}</code>: cuatro valores binarios, no el texto <code>"01020304"</code>. Para cada byte se aplica primero XOR y después ocho pasos de desplazamiento y posible corrección.</p>
+    <h3>El primer paso, sin saltos</h3>
+    <pre><code>crc inicial:        FF = 11111111
+primer byte:        01 = 00000001
+XOR:                FE = 11111110
+
+FE &amp; 80 = 80                 el bit alto estaba en 1
+FE &lt;&lt; 1 = 1FC                se desplaza a la izquierda
+1FC ^ 07 = 1FB               se aplica el polinomio
+(uint8_t)1FB = FB             se conservan ocho bits</code></pre>
+    <p>Los valores del recuadro y la tabla se escriben en hexadecimal. No hace falta memorizar la secuencia: hay que poder justificar el XOR, la prueba del bit alto y las ocho vueltas.</p>
+    <table>
+      <caption>Estado al terminar cada byte</caption>
+      <thead><tr><th>Byte</th><th>CRC anterior</th><th>Después del XOR</th><th>Después de 8 pasos</th></tr></thead>
+      <tbody>
+        <tr><td><code>01</code></td><td><code>FF</code></td><td><code>FE</code></td><td><code>F4</code></td></tr>
+        <tr><td><code>02</code></td><td><code>F4</code></td><td><code>F6</code></td><td><code>CC</code></td></tr>
+        <tr><td><code>03</code></td><td><code>CC</code></td><td><code>CF</code></td><td><code>63</code></td></tr>
+        <tr><td><code>04</code></td><td><code>63</code></td><td><code>67</code></td><td><code>32</code></td></tr>
+      </tbody>
+    </table>
+    <pre><code>Detalle de los ocho pasos, después de cada XOR:
+FE → FB → F1 → E5 → CD → 9D → 3D → 7A → F4
+F6 → EB → D1 → A5 → 4D → 9A → 33 → 66 → CC
+CF → 99 → 35 → 6A → D4 → AF → 59 → B2 → 63
+67 → CE → 9B → 31 → 62 → C4 → 8F → 19 → 32</code></pre>
+    <p>Se conserva el estado entre bytes; no se reinicia a <code>0xFF</code> en cada vuelta del bucle externo. El último estado es <code>0x32</code> (50 en decimal).</p>
+  </section>
+
+  <section id="demo">
+    <h2>5. Qué imprime demo_str y por qué</h2>
+    <pre><code>// demo_str.c (extracto)
+char trimmed[STR_MAX_LEN];
+static const uint8_t payload[] = {0x01U, 0x02U, 0x03U, 0x04U};
+
+str_trim(trimmed, "  hello  ", sizeof(trimmed));
+// print_str imprime el prefijo, trimmed y las comillas finales.
+
+crc = str_crc8(payload, sizeof(payload));
+print_str("crc8: 0x");
+print_hex((unsigned int)crc, 2);
+print_str("\n");</code></pre>
+    <p><code>sizeof(trimmed)</code> vale 128: es la capacidad del array destino, no la longitud del texto. <code>sizeof(payload)</code> vale 4: el array tiene cuatro elementos <code>uint8_t</code> de un byte. Aquí <code>sizeof</code> se aplica a los arrays originales; aplicado a un parámetro puntero no serviría para recuperar la capacidad del array apuntado.</p>
+    <p><code>print_hex</code> recibe el resultado convertido a <code>unsigned int</code>; el argumento <code>2</code> indica dos dígitos hexadecimales. El prefijo <code>0x</code> lo imprime la llamada a <code>print_str</code>. No se usa <code>printf</code>.</p>
+    <pre><code>trimmed: 'hello'
+crc8: 0x32</code></pre>
+    <h3>Una explicación oral posible</h3>
+    <blockquote><p>«Trim encuentra dónde empieza y termina el texto sin blancos exteriores. Copia lo que cabe y reserva un byte para el NUL: hello ocupa cinco caracteres. El CRC procesa cuatro bytes desde un estado FF; por cada byte hace XOR y ocho pasos con el polinomio 07. Conserva el estado entre bytes y termina en 32 hexadecimal».</p></blockquote>
+  </section>
+
+  <section id="preguntas">
+    <h2>6. Comprobá lo que aprendiste</h2>
+    <form data-quiz>
+      <fieldset data-question>
+        <legend>P1. ¿Cómo recorta str_trim el texto?</legend>
+        <label><input id="q1-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> Los blancos interiores permanecen entre las palabras del texto original.</label>
+        <label><input id="q1-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> El recorrido elimina todos los espacios presentes dentro del texto.</label>
+        <label><input id="q1-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> La función isspace reconoce únicamente el carácter espacio como blanco.</label>
+        <label><input id="q1-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> El intervalo útil incluye start pero excluye la posición end.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y D.</strong> Solo se quitan blancos exteriores. El intervalo <code>[start, end)</code> excluye <code>end</code>, por eso su longitud es <code>end - start</code>. B eliminaría también blancos interiores, cosa que no hace el código. C es falsa: <code>isspace</code> también reconoce tabulaciones y saltos de línea, entre otros.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P2. ¿Qué ocurre al recortar "  hello  " con max_len = 4?</legend>
+        <label><input id="q2-a" type="checkbox" data-correct="false"> <span class="option-letter">A.</span> Se copian cuatro letras sin reservar espacio para ningún terminador.</label>
+        <label><input id="q2-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> Se copian tres letras y después se escribe el terminador.</label>
+        <label><input id="q2-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> El retorno vale tres porque cuenta los caracteres efectivamente copiados.</label>
+        <label><input id="q2-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> El retorno vale cinco porque cuenta todo el texto útil.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: B y C.</strong> Hay cuatro lugares incluyendo NUL: se copia <code>"hel"</code>, se escribe NUL en el índice 3 y se devuelve 3. A olvida reservar el terminador. D confunde la longitud útil del origen con la longitud que cabe y se copia al destino.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P3. ¿Qué describen los límites y el cast usados por trim?</legend>
+        <label><input id="q3-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> Con capacidad cero retorna sin escribir nada dentro del destino.</label>
+        <label><input id="q3-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> Con capacidad cero escribe igualmente el terminador al principio siempre.</label>
+        <label><input id="q3-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> Convertir a unsigned char evita argumentos negativos inválidos para isspace.</label>
+        <label><input id="q3-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> La capacidad especificada valida automáticamente cualquier puntero recibido como destino.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y C.</strong> <code>max_len == 0</code> retorna antes de acceder a los datos: no escribe NUL, así que B es falsa. El cast permite clasificar bytes sin pasar negativos inválidos a <code>isspace</code>. D es falsa: cuando hay capacidad positiva, el llamador sigue siendo responsable de aportar memoria válida suficiente.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P4. ¿Cómo procesa str_crc8 los cuatro bytes de la demo?</legend>
+        <label><input id="q4-a" type="checkbox" data-correct="false"> <span class="option-letter">A.</span> El estado inicial vuelve a FF antes de cada byte.</label>
+        <label><input id="q4-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> Cada byte se combina mediante XOR con el estado anterior.</label>
+        <label><input id="q4-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> Se realizan ocho desplazamientos en total para todo el mensaje.</label>
+        <label><input id="q4-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> La prueba del bit alto decide cuándo aplicar el polinomio.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: B y D.</strong> Primero se combina el byte con XOR; en cada paso se prueba el bit alto anterior al desplazamiento y se aplica <code>0x07</code> si estaba encendido. A es falsa: solo se inicializa una vez a <code>0xFF</code>. C es falsa: hay ocho pasos por byte; para cuatro bytes son 32 pasos.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P5. ¿Qué significan la entrada y el resultado del CRC?</legend>
+        <label><input id="q5-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> La demo procesa cuatro bytes binarios y termina en 0x32.</label>
+        <label><input id="q5-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> La demo procesa los ocho caracteres del texto hexadecimal 01020304.</label>
+        <label><input id="q5-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> El resultado demuestra autenticidad porque nunca coincide para entradas distintas.</label>
+        <label><input id="q5-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> La longitud determina cuántos bytes procesa sin buscar ningún terminador.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y D.</strong> El array contiene los valores 1, 2, 3 y 4; su tamaño es cuatro bytes. <code>str_crc8</code> recorre exactamente la longitud recibida, incluso si encuentra bytes cero. B cambia los datos de entrada. C es falsa: un CRC de ocho bits tiene solo 256 resultados, puede haber coincidencias y no acredita autenticidad.</p></div>
+      </fieldset>
+      <button type="submit">Comprobar respuestas</button>
+      <p data-quiz-summary role="status" aria-live="polite"></p>
+    </form>
+  </section>
+  <p class="source"><span class="note-title">Fuentes</span> <a href="../tps/tp3/trabajo_practico/README.md">Consigna del TP3</a>, hito 5, y los fuentes locales linkeados arriba: definen exactamente el CRC de esta lección. Para los operadores y contratos de C, <a href="https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf">borrador público C11, N1570</a>, §§6.5.3.4 (<code>sizeof</code>), 6.5.7 (desplazamientos), 6.5.10–11 (AND y XOR), 6.3.1.3 (conversión a enteros sin signo), 7.4 y 7.4.1.10 (<code>isspace</code>). No se atribuye un nombre de variante estándar al CRC del TP.</p>
+  <nav class="lesson-nav" aria-label="Navegación de la lección">
+    <a href="../index.html">Índice de lecciones</a>
+    <a href="0005-hito-6-uart-simulada.html">Siguiente lección</a>
+    <a href="0003-hito-4-strings-con-capacidad-fija.html">Lección anterior</a>
+    <a href="#trim">Volver al inicio</a>
+    <a href="#preguntas">Ir al cuestionario</a>
+  </nav>
+</main>
+</body>
+</html>

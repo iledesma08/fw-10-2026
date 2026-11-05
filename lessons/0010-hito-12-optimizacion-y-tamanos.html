@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hito 12: optimización y tamaños</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+</head>
+<body>
+<main>
+  <p class="kicker">Preparación TP3 · Lección 0010</p>
+  <h1>Hito 12: optimización y tamaños</h1>
+  <p class="lead">Al terminar vas a poder explicar qué mide la tabla del informe, por qué una optimización puede agrandar una función y qué evidencia hace falta para atribuir una diferencia a una causa.</p>
+
+  <section id="objetivo">
+    <h2>1. Optimizar no significa achicar siempre</h2>
+    <p>El compilador puede transformar el programa para ejecutarlo mejor sin cambiar el comportamiento que debe preservar según el lenguaje. Por ejemplo, puede simplificar cálculos, eliminar trabajo redundante o reemplazar una llamada por instrucciones en su lugar. No es un arreglo de errores lógicos y no vuelve definido un desbordamiento con signo que C no garantiza.</p>
+    <p>Hay compromisos entre velocidad, tamaño y facilidad de depuración. Una función puede crecer si eso permite ejecutarla más rápido. <code>-O2</code> habilita un conjunto de optimizaciones, no una promesa de código mínimo ni de mayor velocidad en cualquier caso concreto. <code>-Os</code> orienta la optimización al tamaño, pero <strong>no es lo usado por este TP</strong>.</p>
+    <table>
+      <caption>Recetas del Makefile actual</caption>
+      <thead><tr><th>Aspecto</th><th>Normal</th><th>Optimizada</th></tr></thead>
+      <tbody>
+        <tr><td>Compilación</td><td><code>-O0 -g</code></td><td><code>-O2 -DNDEBUG</code></td></tr>
+        <tr><td>Objetos</td><td><code>nombre.o</code></td><td><code>nombre_opt.o</code></td></tr>
+        <tr><td>Utilidades al linkear</td><td>Miembros de <code>libutils.a</code>.</td><td>Objetos optimizados pasados directamente.</td></tr>
+        <tr><td>Secciones separadas y descarte</td><td colspan="2"><code>-ffunction-sections -fdata-sections</code> y <code>-Wl,--gc-sections</code> en ambas.</td></tr>
+      </tbody>
+    </table>
+    <p><code>-g</code> incluye información para depurar: no es una optimización. <code>-DNDEBUG</code> define la macro <code>NDEBUG</code>, que desactiva el macro estándar <code>assert</code>; si el programa no usa esas comprobaciones, no hay que atribuirle una reducción imaginaria. Las advertencias y C11 se mantienen en ambas recetas.</p>
+  </section>
+
+  <section id="size">
+    <h2>2. Qué dice la tabla y qué no dice</h2>
+    <pre><code>$ size build/building_process_demo build/building_process_demo_opt</code></pre>
+    <p>El comando necesita que existan ambos archivos. La tabla siguiente reproduce las cifras <strong>declaradas en los informes</strong>; no se volvió a construir la versión optimizada para medirla.</p>
+    <table>
+      <caption>Valores declarados, en bytes</caption>
+      <thead><tr><th>Versión</th><th>text</th><th>data</th><th>bss</th><th>dec</th></tr></thead>
+      <tbody>
+        <tr><td>Normal</td><td>7200</td><td>616</td><td>112</td><td>7928</td></tr>
+        <tr><td>Optimizada</td><td>5903</td><td>616</td><td>104</td><td>6623</td></tr>
+        <tr><td>Optimizada − normal</td><td>−1297</td><td>0</td><td>−8</td><td>−1305</td></tr>
+      </tbody>
+    </table>
+    <p>En el formato Berkeley habitual de GNU <code>size</code>, <code>text</code> agrupa código y datos de solo lectura; <code>data</code> agrupa secciones de datos inicializados escribibles; <code>bss</code> representa almacenamiento sin contenido inicial explícito en el archivo, inicializado en cero para el programa. <strong>Las columnas agrupan secciones: no son los nombres literales de tres únicas secciones.</strong></p>
+    <pre><code>dec normal = 7200 + 616 + 112 = 7928
+dec opt    = 5903 + 616 + 104 = 6623
+reducción text = 1297 / 7200 × 100 ≈ 18,0 %
+reducción total = 1305 / 7928 × 100 ≈ 16,5 %</code></pre>
+    <p><code>dec</code> es la suma en decimal; <code>hex</code>, cuando aparece, es la misma suma en hexadecimal. No son otra sección ni una medida adicional. Estos resultados dependen del entorno: compilador, opciones, bibliotecas y arquitectura pueden cambiarlos.</p>
+  </section>
+
+  <section id="secciones">
+    <h2>3. Archivo, secciones y RAM son preguntas distintas</h2>
+    <p>Una <strong>sección</strong> es una región del archivo objeto o ejecutable con una función y atributos. <code>.text</code> suele contener instrucciones; <code>.rodata</code>, datos de solo lectura; <code>.bss</code>, almacenamiento que comienza en cero. El punto forma parte del nombre. Para ver secciones individualmente:</p>
+    <pre><code>$ size -A build/building_process_demo
+$ readelf -SW build/building_process_demo
+$ objdump -h build/building_process_demo</code></pre>
+    <p><code>size -A</code> lista secciones; <code>readelf -S</code> muestra sus cabeceras y <code>-W</code> evita truncamientos de presentación. <code>objdump -h</code> muestra una tabla de secciones, mientras que <code>objdump -d</code> desensambla instrucciones: no responde la misma pregunta.</p>
+    <table>
+      <caption>Recorte de size -A del normal existente, leído sin recompilar</caption>
+      <thead><tr><th>Sección</th><th>Tamaño</th><th>Lectura</th></tr></thead>
+      <tbody>
+        <tr><td><code>.text</code></td><td>4306</td><td>Código; no equivale a la columna text = 7200.</td></tr>
+        <tr><td><code>.rodata</code></td><td>260</td><td>Datos de solo lectura; contribuyen a text en este formato.</td></tr>
+        <tr><td><code>.eh_frame</code></td><td>1132</td><td>Información de desenrollado de pila, no instrucciones C de la app.</td></tr>
+        <tr><td><code>.data</code></td><td>8</td><td>No equivale a la columna data = 616.</td></tr>
+        <tr><td><code>.bss</code></td><td>112</td><td>Reserva almacenamiento inicializado en cero.</td></tr>
+        <tr><td><code>.debug_info</code></td><td>6215</td><td>Información de depuración; no es memoria de ejecución asignada como .text.</td></tr>
+      </tbody>
+    </table>
+    <p>Así se entiende la pregunta «¿qué sección es la más grande?»: en el archivo normal, <code>.debug_info</code> es mayor que <code>.text</code>. El informe responde sobre las secciones asignadas a memoria durante la ejecución, entre las cuales <code>.text</code> es la mayor. Hay que <strong>explicitar el criterio</strong>, no confundirlo con la columna text. La bandera <code>A</code> de las cabeceras ELF permite identificar secciones asignables a memoria.</p>
+    <p>La suma de la columna data se explica en el informe con <code>.init_array (8) + .fini_array (8) + .dynamic (496) + .got (96) + .data (8) = 616</code>; esas cifras también aparecen en la lectura del normal existente. No hay contradicción en que <code>.data</code> mida 8 y la columna mida 616.</p>
+    <p>Una reserva <code>.bss</code> no exige guardar todos sus ceros como contenido del archivo. Por eso la suma de <code>size</code> <strong>no es el tamaño del archivo en disco</strong>. Tampoco <code>data + bss</code> es toda la RAM usada: faltan la pila, posibles asignaciones dinámicas y otros recursos del proceso. No se puede traducir sin más un ejecutable host a una imagen de firmware.</p>
+    <h3>¿Se achicaron nuestras estructuras?</h3>
+    <p>El informe declara los mismos tamaños en ambos ejecutables: <code>sim_uart = 20</code>, <code>sim_ring = 38</code> y <code>timer_ms = 4</code> bytes. Son variables de duración estática; optimizar no las convierte automáticamente en variables de pila. En el normal existente, <code>nm -S</code> confirma esos tamaños, indicados como <code>0x14</code>, <code>0x26</code> y <code>0x04</code>.</p>
+    <p>Que el total bss baje de 112 a 104 no demuestra que esas tres variables requieran menos espacio. Para explicar los ocho bytes exactos habría que comparar símbolos, alineación y disposición de ambas construcciones. Una suma incompleta de símbolos no prueba que todo lo restante sea relleno ni permite atribuirlo a <code>stdout</code> sin comprobarlo.</p>
+  </section>
+
+  <section id="funciones">
+    <h2>4. De una función a su tamaño</h2>
+    <pre><code>$ nm -S --size-sort build/building_process_demo
+$ nm -S --size-sort build/building_process_demo_opt
+
+# Ejemplo leído del normal:
+0000000000001464 0000000000000318 T demo_embedded</code></pre>
+    <p>La primera columna es el valor/dirección del símbolo, la segunda su tamaño, después vienen el tipo y el nombre. Los números son hexadecimales por defecto: <code>0x318 = 792</code> bytes. <code>--size-sort</code> ordena por tamaño, no por orden de ejecución. La suma de tamaños de funciones no es todo el archivo.</p>
+    <table>
+      <caption>Tamaños por función declarados en el informe</caption>
+      <thead><tr><th>Función</th><th>Normal</th><th>Optimizada</th></tr></thead>
+      <tbody>
+        <tr><td><code>demo_embedded</code></td><td>792</td><td>594</td></tr>
+        <tr><td><code>str_trim</code></td><td>335</td><td>240</td></tr>
+        <tr><td><code>ring_pop</code></td><td>120</td><td>54</td></tr>
+        <tr><td><code>math_is_prime</code></td><td>186</td><td>199</td></tr>
+        <tr><td><code>math_factorial</code></td><td>67</td><td>79</td></tr>
+      </tbody>
+    </table>
+    <p>Algunas funciones se achican y otras crecen. Eso es compatible con una reducción del total: se suman los efectos de muchas transformaciones. No basta con mirar una función para explicar todo el cambio.</p>
+    <h3>Inlining: menos llamadas, posibles copias más grandes</h3>
+    <p>Inlinear significa sustituir una llamada por código derivado del cuerpo en ese punto. Puede eliminar el costo de llamar y volver, y permitir simplificar operaciones con argumentos conocidos. Pero repetir el cuerpo en muchos llamadores también puede aumentar el tamaño. <strong>No se inlinea todo porque no siempre conviene.</strong></p>
+    <p>Que desaparezca un símbolo independiente no demuestra por sí solo inlining: puede haber eliminación de código o una decisión de no emitir el cuerpo separado. Además, el compilador y el linker actúan en etapas distintas; no hay que atribuir automáticamente toda ausencia a <code>--gc-sections</code>.</p>
+  </section>
+
+  <section id="reportes">
+    <h2>5. Pedir evidencia de transformaciones concretas</h2>
+    <pre><code>$ make report-inline
+$ make report-optimized</code></pre>
+    <p>El primero agrega <code>-fopt-info-inline</code> a la compilación de ring, UART y strings. El segundo usa <code>-fopt-info-optimized</code> sobre <code>demo_embedded.c</code>. Ambos usan <code>OPT_FLAGS</code>; los fuentes elegidos son casos representativos, no una auditoría de todo el programa.</p>
+    <pre><code># Extractos declarados en INFORME.md:
+Inlining ring_is_full/1 into ring_push/3.
+Inlining uart_send_byte/2 into uart_send/3.
+loop with 4 iterations completely unrolled
+basic block part vectorized using 16 byte vectors</code></pre>
+    <p><strong>Desenrollar</strong> expande iteraciones para reducir control del bucle o simplificar trabajo. <strong>Vectorizar</strong> usa operaciones que procesan varios datos en conjunto. El reporte permite atribuir esas transformaciones a esa compilación y versión de GCC; no prueba por sí solo cuántos de los 1297 bytes ahorrados explica cada una, ni una mejora de tiempo medida.</p>
+    <p>En el Makefile, <code>REPORT_DIR ?= ...</code> proporciona un valor por defecto que puede reemplazarse. El bucle shell <code>for f in ...; do ...; done</code> recorre fuentes; <code>$$f</code> permite que Make entregue <code>$f</code> al shell, y <code>basename ... .c</code> genera el nombre del objeto temporal. <code>-c</code> compila sin linkear y <code>-o</code> elige la salida. Las barras invertidas continúan la receta; <code>set -e</code> hace fallar la receta ante un comando fallido.</p>
+    <h3>Una conclusión defendible</h3>
+    <blockquote><p>«En los resultados declarados, text baja aproximadamente 18 % y el total 16,5 %. Hay reportes concretos de inlining y optimización de bucles, pero no una prueba de que toda función se achique. Las variables estáticas principales mantienen sus tamaños. La comparación del Makefile también cambia archive por objetos directos; no atribuyo todo a una única causa sin un experimento controlado».</p></blockquote>
+  </section>
+
+  <section id="preguntas">
+    <h2>6. Comprobá lo que aprendiste</h2>
+    <form data-quiz>
+      <fieldset data-question>
+        <legend>P1. ¿Qué permite concluir la tabla de size?</legend>
+        <label><input id="q1-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> El total decimal suma las columnas text, data y bss.</label>
+        <label><input id="q1-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> El total decimal coincide necesariamente con todo el archivo físico.</label>
+        <label><input id="q1-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> La columna text representa únicamente la sección llamada literalmente .text.</label>
+        <label><input id="q1-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> Las cifras comparadas dependen del entorno donde fueron construidos ambos.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y D.</strong> <code>dec = text + data + bss</code> y los resultados dependen de la construcción. B confunde ese resumen con el archivo, que tiene cabeceras y otras secciones. C es falsa: text agrupa varias secciones, incluidos datos de solo lectura en el formato usado.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P2. ¿Qué hay que matizar sobre las opciones y el enlace?</legend>
+        <label><input id="q2-a" type="checkbox" data-correct="false"> <span class="option-letter">A.</span> La opción -O2 garantiza reducir individualmente todas las funciones presentes.</label>
+        <label><input id="q2-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> La opción -g agrega información destinada a facilitar la depuración.</label>
+        <label><input id="q2-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> Las recetas también difieren en cómo suministran utilidades al enlace.</label>
+        <label><input id="q2-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> La macro NDEBUG elimina cualquier comprobación escrita dentro del programa.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: B y C.</strong> La información de depuración no es una optimización; el normal usa archive y el optimizado objetos directos. A contradice los ejemplos de funciones que crecen. D es falsa: <code>NDEBUG</code> afecta <code>assert</code>, no elimina validaciones propias que no dependan de él.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P3. ¿Qué significan la memoria estática y las secciones?</legend>
+        <label><input id="q3-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> La reserva bss no guarda todos sus ceros como contenido.</label>
+        <label><input id="q3-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> La suma data más bss incluye siempre toda la pila.</label>
+        <label><input id="q3-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> La optimización convierte automáticamente toda variable estática en almacenamiento automático.</label>
+        <label><input id="q3-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> Las secciones individuales se consultan separadamente mediante la opción -A.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y D.</strong> <code>.bss</code> reserva almacenamiento y <code>size -A</code> individualiza secciones. B omite que la pila es otro consumo. C confunde una optimización con cambiar la duración de los objetos del programa.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P4. ¿Qué evidencia permite hablar de inlining?</legend>
+        <label><input id="q4-a" type="checkbox" data-correct="false"> <span class="option-letter">A.</span> La ausencia de cualquier símbolo demuestra siempre que fue inlineado.</label>
+        <label><input id="q4-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> El reporte del compilador identifica transformaciones concretas de esa compilación.</label>
+        <label><input id="q4-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> El reemplazo de llamadas puede agrandar algunos cuerpos de funciones.</label>
+        <label><input id="q4-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> El reporte aislado explica necesariamente toda diferencia del ejecutable final.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: B y C.</strong> Los reportes dan evidencia localizada, y duplicar cuerpos puede aumentar tamaños. A ignora otras causas de ausencia. D convierte ejemplos de transformaciones en una explicación cuantitativa completa que esos ejemplos no aportan.</p></div>
+      </fieldset>
+      <fieldset data-question>
+        <legend>P5. ¿Cómo se defiende la interpretación de los tamaños?</legend>
+        <label><input id="q5-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> El tamaño hexadecimal 0x318 equivale a 792 bytes en decimal.</label>
+        <label><input id="q5-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> Toda diferencia restante demuestra relleno aunque falten símbolos por analizar.</label>
+        <label><input id="q5-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> La sección más grande resulta independiente del criterio de comparación.</label>
+        <label><input id="q5-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> Las secciones debug pueden superar al código dentro del archivo.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y D.</strong> Los tamaños de <code>nm -S</code> se leen en hexadecimal por defecto y el normal tiene <code>.debug_info</code> mayor que <code>.text</code>. B requiere un análisis completo que no se reemplaza por una resta. C ignora la diferencia entre todas las secciones del archivo y las asignadas a memoria.</p></div>
+      </fieldset>
+      <button type="submit">Comprobar respuestas</button>
+      <p data-quiz-summary role="status" aria-live="polite"></p>
+    </form>
+  </section>
+  <p class="source"><span class="note-title">Fuentes</span> <a href="../tps/tp3/trabajo_practico/README.md">README</a>, hito 12; <a href="../tps/tp3/trabajo_practico/Makefile">Makefile</a>, flags, targets de reportes y enlaces; <a href="../tps/tp3/trabajo_practico/INFORME.md">INFORME.md</a> y <a href="../tps/tp3/trabajo_practico/INFORME_EXT.md">INFORME_EXT.md</a>, cifras declaradas. Manuales primarios: <a href="https://sourceware.org/binutils/docs/binutils/size.html">GNU size</a>, <a href="https://sourceware.org/binutils/docs/binutils/nm.html">nm</a>, <a href="https://sourceware.org/binutils/docs/binutils/readelf.html">readelf</a>, <a href="https://sourceware.org/binutils/docs/binutils/objdump.html">objdump</a>, GCC <a href="https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html">Optimize Options</a> y <a href="https://gcc.gnu.org/onlinedocs/gcc/Developer-Options.html">Developer Options</a>. Artefactos normales inspeccionados con Binutils 2.42; GCC instalado 13.3.0 no implica haber recompilado esos artefactos con él en esta entrega.</p>
+  <nav class="lesson-nav" aria-label="Navegación de la lección">
+    <a href="../index.html">Índice de lecciones</a>
+    <a href="0009-hito-11-biblioteca-estatica.html">Lección anterior</a>
+    <a href="0011-hito-14-simbolos-y-defensa.html">Siguiente lección</a>
+    <a href="#preguntas">Ir al cuestionario</a>
+  </nav>
+</main>
+</body>
+</html>

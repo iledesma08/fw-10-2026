@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hito 1: cómo se conecta main con la salida de consola</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+</head>
+<body>
+<main>
+  <p class="kicker">Preparación TP3 · Lección 0001</p>
+  <h1>Hito 1: cómo se conecta <code>main</code> con la salida de consola</h1>
+
+  <p class="lead">Al terminar vas a poder explicar por qué una referencia sin definir en un <code>.o</code> no es necesariamente un error, y cómo el enlace encuentra la definición de <code>print_str</code> hasta llegar a la salida del host.</p>
+
+  <section id="etapas">
+    <h2>1. Dos etapas: compilar y linkear</h2>
+
+    <p>El TP separa dos momentos que conviene no mezclar:</p>
+
+    <figure>
+      <pre><code>$ gcc -c main.c       ─> main.o
+$ gcc -c print.c      ─> print.o
+$ gcc -c print_host.c ─> print_host.o
+                            │
+                            │ enlace
+                            ▼
+                 building_process_demo</code></pre>
+    </figure>
+
+    <p>Un <code>.o</code> es un objeto relocalizable: contiene código máquina, una tabla de símbolos y referencias que todavía pueden quedar pendientes. No es un ejecutable.</p>
+
+    <p>Para inspeccionar o desensamblar ese código máquina y observar las instrucciones generadas en assembler, se puede usar el comando <code>objdump -d main.o</code> (o <code>objdump -d build/app/main.o</code>).</p>
+
+    <p>La opción <code>-c</code> le dice a <code>gcc</code> que se detenga antes del enlace; <code>-o</code> nombra el archivo de salida de la etapa elegida. El linker combina objetos, resuelve esas referencias y produce el ejecutable.</p>
+
+    <p>Incluir un header tampoco incorpora el cuerpo de una función. Este <code>print.h</code> declara la interfaz:</p>
+
+    <pre><code>void print_chr(char ch);              // print.h:17
+void print_str(const char *p);        // print.h:23</code></pre>
+
+    <p>La declaración alcanza para que el compilador acepte la llamada y sepa qué tipo tiene. El cuerpo de <code>print_str</code> está en <code>print.c</code>; el de <code>print_chr</code>, en el backend de la plataforma (en este caso la plataforma es host, correspondiente a la arquitectura x86_64).</p>
+  </section>
+
+  <section id="recorrido">
+    <h2>2. El recorrido de <code>print_str</code></h2>
+
+    <pre><code>#include "print.h"
+
+int main(void) {
+    print_str("Hello, World!\n");
+    return 0;
+}</code></pre>
+
+    <p>Con ese <code>main</code>, el informe del hito 1 muestra que <code>main.o</code> referencia <code>print_str</code> pero no la define:</p>
+
+    <pre><code>$ nm build/app/main.o
+0000000000000000 T main
+                 U print_str</code></pre>
+
+    <p>La definición aparece en <code>print.c</code>. Estas son las líneas que importan:</p>
+
+    <pre><code>void print_str(const char *p) {        // print.c:8
+  while (*p != '\0')                   // print.c:9
+    print_chr(*p++);                   // print.c:10
+}                                      // print.c:11</code></pre>
+
+    <p>Si leemos el código de esta función:</p>
+    <ul>
+      <li><code>p</code> apunta al carácter actual del string.</li>
+      <li><code>*p != '\0'</code> detecta el terminador NUL y corta el recorrido.</li>
+      <li><code>*p++</code> entrega el carácter apuntado y después avanza el puntero. El <code>++</code> modifica <code>p</code>, no el carácter.</li>
+      <li><code>print_chr</code> no está definida en <code>print.c</code>: solo está declarada en el header. Por eso <code>print.o</code> conserva una referencia pendiente.</li>
+    </ul>
+
+    <p>En la plataforma host, el backend es una línea:</p>
+
+    <pre><code>void print_chr(char ch) { putchar(ch); }   // print_host.c:9</code></pre>
+
+    <p><code>putchar</code> y <code>stdout</code> vienen de la biblioteca C.</p>
+
+    <p>Entonces el recorrido completo es:</p>
+
+    <pre><code>main.o          U print_str
+   └─ print.o          T print_str   +   U print_chr
+        └─ print_host.o                T print_chr   +   U putchar / stdout</code></pre>
+
+    <p>El linker va conectando cada referencia con una definición. La cadena de los tres objetos del TP queda resuelta; la dependencia de <code>libc</code> por <code>putchar</code> sigue existiendo, pero no impide construir el ejecutable.</p>
+  </section>
+
+  <section id="simbolos">
+    <h2>3. Qué permite averiguar <code>nm</code></h2>
+
+    <p><code>nm</code> lista los símbolos de un archivo objeto. Para esta lección alcanzan dos letras:</p>
+
+    <table>
+      <caption>Lectura mínima de la tabla de símbolos</caption>
+      <thead>
+        <tr><th>Letra</th><th>Significado</th><th>Ejemplo en el TP</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>U</code></td><td>Indefinido en ese objeto: se usa, pero no se define allí.</td><td><code>main.o</code>: <code>U print_str</code></td></tr>
+        <tr><td><code>T</code></td><td>Definido en la sección de texto (código), con alcance global.</td><td><code>print.o</code>: <code>T print_str</code></td></tr>
+      </tbody>
+    </table>
+
+    <p>Las minúsculas suelen indicar símbolos locales y las mayúsculas, globales; <code>U</code> es una referencia sin definición en ese objeto. El manual oficial de <code>nm</code> describe todos los tipos y aclara que <code>U</code> no es un error por sí mismo.</p>
+
+    <p>Estas son las salidas que el informe del hito 1 cita para la cadena:</p>
+
+    <pre><code>$ nm build/platform/print.o
+                 U print_chr
+0000000000000000 T print_dec
+0000000000000000 T print_hex
+0000000000000000 T print_str
+                 U __stack_chk_fail
+
+$ nm build/platform/host/print_host.o
+                 U fflush
+0000000000000000 T print_chr
+0000000000000000 T print_flush_buffer
+                 U putchar
+                 U stdout</code></pre>
+
+    <p>La conclusión del informe —«<code>print_str</code> está en <code>print.o</code>»— se justifica comparando la <code>U</code> del consumidor con la <code>T</code> del proveedor. Mirar solo <code>print.h</code> no alcanza: el header declara, pero no dice en qué objeto está el cuerpo.</p>
+  </section>
+
+  <section id="plataforma">
+    <h2>4. ¿Por qué se linkean <code>print.o</code> y <code>print_host.o</code> si no están en <code>SRCS</code>?</h2>
+
+    <p>Porque la plataforma tiene su propia lista en el Makefile:</p>
+
+    <pre><code>PLATFORM      = host
+PLATFORM_SRCS = src/platform/print.c $(wildcard src/platform/$(PLATFORM)/*.c)
+PLATFORM_OBJS = $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(PLATFORM_SRCS))</code></pre>
+
+    <p>La regla de enlace del target incluye explícitamente <code>$(PLATFORM_OBJS)</code> como prerrequisito junto con los objetos de la aplicación (<code>$(TARGET): $(OBJS) $(PLATFORM_OBJS)</code>). Al ejecutar el comando de enlace, GCC recibe la lista completa de objetos: los de la aplicación y los de la plataforma. Por eso los dos objetos de plataforma (<code>print.o</code> y <code>print_host.o</code>) llegan al ejecutable aunque no figuren en <code>SRCS</code>.</p>
+  </section>
+
+  <section id="explicacion">
+    <h2>5. Una explicación oral posible</h2>
+
+    <blockquote>
+      <p>«Compilamos cada fuente a un objeto. <code>main.o</code> referencia <code>print_str</code> pero no la define; <code>print.o</code> la define y a su vez referencia <code>print_chr</code>, definida por el backend host. El linker resuelve esas referencias al construir el ejecutable».</p>
+    </blockquote>
+
+    <p>Si te preguntan por qué <code>U print_str</code> no es un error, la respuesta corta es: porque <code>U</code> describe una referencia pendiente dentro de ese objeto, y el enlace es justamente la etapa que la resuelve con la definición de <code>print.o</code>.</p>
+  </section>
+
+  <section id="preguntas">
+    <h2>6. Comprobá lo que aprendiste</h2>
+
+    <form data-quiz>
+      <fieldset data-question>
+        <legend>P1. ¿Qué afirmaciones describen correctamente compilar y linkear en este TP?</legend>
+        <label><input id="q1-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> Compilar genera objetos que pueden conservar referencias externas.</label>
+        <label><input id="q1-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> Linkear conecta referencias externas con sus definiciones correspondientes.</label>
+        <label><input id="q1-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> Compilar incorpora automáticamente todas las implementaciones declaradas externamente.</label>
+        <label><input id="q1-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> Linkear convierte directamente comentarios del código en instrucciones.</label>
+        <div data-feedback hidden>
+          <p data-verdict></p>
+          <p><strong>Correctas: A y B.</strong> A: el <code>.o</code> puede conservar referencias externas. B: el enlace busca las definiciones y ajusta las referencias. C es falsa: una declaración no copia la implementación; el objeto puede seguir con una <code>U</code> hasta el enlace. D es falsa: los comentarios se descartan en el preprocesamiento y no se convierten en instrucciones. Apoyo: manual de GCC sobre etapas y opciones.</p>
+        </div>
+      </fieldset>
+
+      <fieldset data-question>
+        <legend>P2. En el hito 1, ¿qué permite interpretar <code>U print_str</code> en <code>main.o</code>?</legend>
+        <label><input id="q2-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> Este objeto utiliza print_str, pero no la define.</label>
+        <label><input id="q2-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> Este objeto implementa print_str, pero nunca la utiliza.</label>
+        <label><input id="q2-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> Este objeto contiene necesariamente un error de compilación.</label>
+        <label><input id="q2-d" type="checkbox" data-correct="true"> <span class="option-letter">D.</span> Este objeto necesita resolver print_str durante el enlace.</label>
+        <div data-feedback hidden>
+          <p data-verdict></p>
+          <p><strong>Correctas: A y D.</strong> <code>U</code> significa indefinido en ese objeto: se usa <code>print_str</code>, pero no se define allí, y el enlace debe resolverla. B confunde <code>U</code> con <code>T</code>, que indica una definición en la sección de texto. C es falsa: una referencia sin definir es normal en un <code>.o</code>; la compilación produjo el objeto. En este TP la definición propia se incorpora desde <code>print.o</code>. Cuidado: un ejecutable dinámico puede conservar <code>U</code> para símbolos importados; esta pregunta se refiere a la cadena propia del hito 1.</p>
+        </div>
+      </fieldset>
+
+      <fieldset data-question>
+        <legend>P3. En este proyecto, ¿qué relación hay entre <code>print.h</code> y <code>print.c</code>?</legend>
+        <label><input id="q3-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> Incluir print.h permite conocer cómo se declara print_str.</label>
+        <label><input id="q3-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> Incluir print.h copia automáticamente la implementación de print_str.</label>
+        <label><input id="q3-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> La implementación de print_str está definida en print.c.</label>
+        <label><input id="q3-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> Incluir print.h evita linkear cualquier objeto de plataforma.</label>
+        <div data-feedback hidden>
+          <p data-verdict></p>
+          <p><strong>Correctas: A y C.</strong> <code>print.h</code> contiene el prototipo de <code>print_str</code>, que permite compilar la llamada con su tipo; <code>print.c</code> contiene el cuerpo. B es falsa: incluir el header no copia la implementación. D es falsa: el header no evita linkear el backend que provee <code>print_chr</code>. Nota: en este TP hay headers con <code>static inline</code>, como <code>bit_set</code> en <code>mathlib.h</code>; «header solo declara» no es una regla universal, aunque sí describe a <code>print.h</code>.</p>
+        </div>
+      </fieldset>
+
+      <fieldset data-question>
+        <legend>P4. ¿Qué describe el recorrido de salida de <code>print_str</code> en la plataforma host actual?</legend>
+        <label><input id="q4-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> print_str recorre caracteres y delega su salida individual.</label>
+        <label><input id="q4-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> print_chr utiliza putchar en el backend host actual.</label>
+        <label><input id="q4-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> print_str escribe directamente los registros UART del hardware.</label>
+        <label><input id="q4-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> print_chr calcula automáticamente el CRC del texto recibido.</label>
+        <div data-feedback hidden>
+          <p data-verdict></p>
+          <p><strong>Correctas: A y B.</strong> <code>print_str</code> recorre hasta el NUL y llama a <code>print_chr</code> por cada carácter; en host, <code>print_chr</code> usa <code>putchar</code>. C es falsa: el backend host no escribe registros UART; la UART simulada aparece en otro hito. D es falsa: el CRC se calcula en <code>strutils</code> para la trama, no en la salida de consola. La cadena termina en <code>putchar</code>/<code>stdout</code> de libc.</p>
+        </div>
+      </fieldset>
+
+      <fieldset data-question>
+        <legend>P5. En <code>gcc -c archivo.c -o archivo.o</code>, ¿qué hacen <code>-c</code> y <code>-o</code>?</legend>
+        <label><input id="q5-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> La opción -c genera objetos sin realizar enlace.</label>
+        <label><input id="q5-b" type="checkbox" data-correct="true"> <span class="option-letter">B.</span> La opción -o establece el nombre del resultado.</label>
+        <label><input id="q5-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> La opción -c construye necesariamente un ejecutable completo.</label>
+        <label><input id="q5-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> La opción -o activa automáticamente optimizaciones entre archivos.</label>
+        <div data-feedback hidden>
+          <p data-verdict></p>
+          <p><strong>Correctas: A y B.</strong> <code>-c</code> detiene el proceso antes del enlace y produce un objeto; <code>-o</code> nombra el archivo de salida de la etapa elegida. C es falsa: un <code>.o</code> no es un ejecutable completo. D es falsa: <code>-o</code> no activa optimizaciones; para eso están opciones como <code>-O2</code>, que no aparecen en este ejemplo. <code>archivo.c</code> es un nombre didáctico, no un archivo real de la entrega.</p>
+        </div>
+      </fieldset>
+
+      <button type="submit">Comprobar respuestas</button>
+      <p data-quiz-summary role="status" aria-live="polite"></p>
+    </form>
+
+    <p class="source"><span class="note-title">Fuente primaria recomendada</span> Manual oficial de GCC, <a href="https://gcc.gnu.org/onlinedocs/gcc/Overall-Options.html">opciones generales y etapas de compilación</a>, y manual oficial de GNU Binutils, <a href="https://sourceware.org/binutils/docs/binutils/nm.html"><code>nm</code></a>. El <a href="../reference/0001-compilacion-enlace-y-simbolos.html">resumen local</a> condensa lo necesario para esta lección.</p>
+  </section>
+
+  <nav class="lesson-nav" aria-label="Navegación de la lección">
+    <a href="../index.html">Índice de lecciones</a>
+    <a href="../reference/0001-compilacion-enlace-y-simbolos.html">Referencia 0001: etapas y símbolos</a>
+    <a href="../reference/0002-secciones-de-memoria-y-layout.html">Referencia 0002: secciones de memoria</a>
+    <a href="../lessons/0002-hitos-2-3-matematica-y-simbolos.html">Siguiente lección</a>
+  </nav>
+</main>
+</body>
+</html>

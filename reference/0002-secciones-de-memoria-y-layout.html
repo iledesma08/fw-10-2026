@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Referencia 0002: Secciones de memoria (Text, Data, BSS, Heap y Stack)</title>
+  <link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main>
+  <p class="kicker">Preparación TP3 · Referencia 0002</p>
+  <h1>Secciones de memoria: text, data, bss, heap y stack</h1>
+
+  <p class="lead">Guía conceptual y práctica sobre la distribución de memoria (layout), qué representa cada sección, dónde residen en hardware (Flash vs. RAM) y cómo se inspeccionan con las herramientas del curso.</p>
+
+  <nav aria-label="Secciones de la referencia">
+    <p><strong>En esta hoja:</strong>
+      <a href="#mapa">Mapa de memoria</a> ·
+      <a href="#secciones-estaticas">Text, Data y BSS</a> ·
+      <a href="#memoria-dinamica">Heap y Stack</a> ·
+      <a href="#flash-vs-ram">Flash frente a RAM</a> ·
+      <a href="#comandos">Comandos de inspección</a>
+    </p>
+  </nav>
+
+  <section id="mapa">
+    <h2>1. El mapa de memoria (Memory Layout)</h2>
+
+    <p>Todo programa en ejecución organiza su espacio de direcciones en diferentes regiones o segmentos con propósitos y permisos específicos (lectura, escritura, ejecución):</p>
+
+    <pre><code> Dirección alta
+ ┌──────────────────────────────────────────────┐
+ │                    STACK                     │  (crece hacia abajo ▼)
+ │  Variables locales, frames y retorno         │
+ ├──────────────────────────────────────────────┤
+ │                      │                       │
+ │                      ▼                       │
+ │                                              │
+ │                      ▲                       │
+ │                      │                       │
+ ├──────────────────────────────────────────────┤
+ │                     HEAP                     │  (crece hacia arriba ▲)
+ │  Memoria dinámica (malloc / free)            │
+ ├──────────────────────────────────────────────┤
+ │                     .bss                     │
+ │  Variables globales/estáticas en 0 o sin init│  (alojado en RAM)
+ ├──────────────────────────────────────────────┤
+ │                    .data                     │
+ │  Variables globales/estáticas inicializadas  │  (copiado a RAM)
+ ├──────────────────────────────────────────────┤
+ │                   .rodata                    │
+ │  Constantes y literales de solo lectura      │  (Flash / ROM)
+ ├──────────────────────────────────────────────┤
+ │                    .text                     │
+ │  Instrucciones de código máquina             │  (Flash / ROM)
+ └──────────────────────────────────────────────┘
+ Dirección baja (0x00000000...)</code></pre>
+
+    <p>En este esquema se distinguen dos grandes grupos:</p>
+    <ul>
+      <li><strong>Secciones estáticas</strong> (definidas durante la compilación y enlace): <code>.text</code>, <code>.rodata</code>, <code>.data</code> y <code>.bss</code>. Su tamaño total queda fijado al construir el binario.</li>
+      <li><strong>Regiones dinámicas</strong> (gestionadas en tiempo de ejecución): <strong>Heap</strong> y <strong>Stack</strong>. No ocupan espacio dentro del archivo ejecutable en disco.</li>
+    </ul>
+  </section>
+
+  <section id="secciones-estaticas">
+    <h2>2. Diferencia entre text, data y bss</h2>
+
+    <h3><code>.text</code> (Código de instrucciones)</h3>
+    <ul>
+      <li><strong>Qué almacena:</strong> las instrucciones binarias en código máquina correspondientes a todas las funciones compiladas (como <code>main</code>, <code>math_factorial</code>, <code>print_str</code>, etc.).</li>
+      <li><strong>Permisos:</strong> Solo lectura y ejecución (<strong>RX</strong>). No se puede escribir en tiempo de ejecución para evitar que un programa modifique su propio código o sufra inyecciones de código.</li>
+      <li><strong>Tamaño en el binario:</strong> ocupa espacio físico exacto en el archivo ejecutable.</li>
+    </ul>
+
+    <h3><code>.rodata</code> (Read-Only Data)</h3>
+    <ul>
+      <li><strong>Qué almacena:</strong> constantes globales que nunca deben modificarse en tiempo de ejecución, literales de strings (como <code>"Hello, World!\n"</code>) y tablas fijas. En el TP, arrays como <code>static const char PROGRAM_NAME[] = "building-process";</code> se ubican en esta sección.</li>
+      <li><strong>Permisos:</strong> Solo lectura (<strong>R</strong>).</li>
+      <li><strong>Relación con <code>size</code>:</strong> la columna Berkeley <code>text</code> de GNU <code>size</code> suma tanto <code>.text</code> como <code>.rodata</code> y otras secciones de solo lectura.</li>
+    </ul>
+
+    <h3><code>.data</code> (Datos globales inicializados)</h3>
+    <ul>
+      <li><strong>Qué almacena:</strong> variables globales o estáticas que fueron inicializadas explícitamente en el código con un <strong>valor distinto de cero</strong> (por ejemplo: <code>int contador = 10;</code>).</li>
+      <li><strong>Permisos:</strong> Lectura y escritura (<strong>RW</strong>).</li>
+      <li><strong>Tamaño en el binario:</strong> ocupa espacio físico en el archivo ejecutable, porque los valores con los que arranca deben estar guardados en el archivo.</li>
+      <li><strong>En el TP:</strong> el código de aplicación del TP3 no define variables globales inicializadas con valores distintos de cero (por eso <code>.data</code> de nuestra app mide cero, y solo el runtime de C/ELF agrega algunos bytes internos).</li>
+    </ul>
+
+    <h3><code>.bss</code> (Datos globales en cero o sin inicializar)</h3>
+    <ul>
+      <li><strong>Qué almacena:</strong> variables globales o estáticas que <strong>no fueron inicializadas explícitamente</strong> en el código C, o que fueron inicializadas explícitamente en <strong>cero</strong> (por ejemplo: <code>int buffer[100];</code> o <code>static int estado = 0;</code>).</li>
+      <li><strong>Origen del nombre:</strong> <em>Block Started by Symbol</em> (un operador histórico de ensamblador).</li>
+      <li><strong>Permisos:</strong> Lectura y escritura (<strong>RW</strong>).</li>
+      <li><strong>Tamaño en el binario:</strong> <strong>0 bytes de datos en el archivo ejecutable</strong>. El binario solo guarda un número de 4 u 8 bytes que indica cuántos bytes de BSS necesita el programa al arrancar. Esto ahorra mucho espacio en disco o memoria Flash: un array de 1 MB sin inicializar no agrega 1 MB al archivo compilado.</li>
+      <li><strong>En el TP:</strong> las estructuras de simulación como <code>sim_uart</code> (20 bytes), <code>sim_ring</code> (38 bytes) y el acumulador <code>timer_ms</code> (4 bytes) son variables estáticas sin inicializar, por lo que residen en BSS.</li>
+    </ul>
+  </section>
+
+  <section id="memoria-dinamica">
+    <h2>3. Qué son el Heap y el Stack</h2>
+
+    <h3>¿Cuál es el Heap?</h3>
+    <p>El <strong>Heap</strong> (o montículo) es la región de memoria RAM destinada a la <strong>asignación dinámica</strong> solicitada explícitamente por el programador en tiempo de ejecución mediante funciones como <code>malloc()</code>, <code>calloc()</code> o <code>realloc()</code>, y liberada con <code>free()</code>.</p>
+    <ul>
+      <li><strong>Ubicación:</strong> comienza justo al terminar la sección <code>.bss</code> y crece hacia arriba (hacia direcciones de memoria más altas).</li>
+      <li><strong>Vida útil:</strong> los bloques en el heap persisten hasta que se llama a <code>free()</code> o finaliza el proceso; no se destruyen al retornar de una función.</li>
+      <li><strong>En sistemas embebidos:</strong> en firmware bare-metal y sistemas de tiempo real críticos (médicos, automotrices, aeroespaciales) <strong>se desaconseja o prohíbe el uso del heap</strong> para evitar la fragmentación de la memoria RAM, fugas de memoria (<em>memory leaks</em>) y tiempos de asignación impredecibles. En este TP3 no se utiliza el heap.</li>
+    </ul>
+
+    <h3>¿Qué es el Stack?</h3>
+    <p>El <strong>Stack</strong> (o pila de llamadas) es la región de memoria RAM administrada automáticamente por la CPU y el compilador a través del registro <em>Stack Pointer</em> (<code>SP</code>).</p>
+    <ul>
+      <li><strong>Qué almacena:</strong> variables locales automáticas de las funciones, direcciones de retorno cuando se llama a una función, registros salvados y parámetros pasados por pila.</li>
+      <li><strong>Ubicación y crecimiento:</strong> en x86_64 y ARM Cortex-M, el stack comienza en el extremo más alto de la memoria RAM disponible y crece hacia abajo (hacia direcciones más bajas, acercándose al heap).</li>
+      <li><strong>Vida útil:</strong> cuando una función es invocada se crea su marco de pila (<em>stack frame</em>); al retornar de la función, el puntero de pila retrocede y esa memoria se reutiliza de inmediato.</li>
+      <li><strong>Stack Overflow:</strong> ocurre cuando llamadas anidadas muy profundas (recursión infinita) o buffers locales excesivamente grandes superan el límite del stack y colisionan con el heap o las variables globales, provocando un fallo catastrófico (<em>Segmentation Fault</em> en Linux o un <em>HardFault</em> en microcontroladores).</li>
+    </ul>
+  </section>
+
+  <section id="flash-vs-ram">
+    <h2>4. ¿Están en Flash o en RAM?</h2>
+
+    <p>La respuesta depende de si consideramos un <strong>microcontrolador embebido</strong> (como ARM Cortex-M) o un <strong>sistema operativo host</strong> (como Linux en una notebook):</p>
+
+    <table>
+      <caption>Distribución física de las secciones de memoria</caption>
+      <thead>
+        <tr><th>Sección / Región</th><th>En microcontroladores embebidos</th><th>En Linux (Host)</th><th>Persistencia</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>.text</code></td>
+          <td><strong>Flash (ROM)</strong>: se ejecuta directo desde Flash (XIP: <em>eXecute In Place</em>).</td>
+          <td><strong>Memoria Virtual (RAM)</strong>: mapeado desde el archivo ELF con páginas Read-Only + Execute.</td>
+          <td>No volátil (sobrevive al corte de energía).</td>
+        </tr>
+        <tr>
+          <td><code>.rodata</code></td>
+          <td><strong>Flash (ROM)</strong>: constantes y tablas fijas.</td>
+          <td><strong>Memoria Virtual (RAM)</strong>: páginas Read-Only mapeadas del ejecutable.</td>
+          <td>No volátil.</td>
+        </tr>
+        <tr>
+          <td><code>.data</code></td>
+          <td><strong>Flash (carga) → RAM (ejecución)</strong>: guardada en Flash y copiada a RAM al arrancar.</td>
+          <td><strong>RAM (Memoria Virtual)</strong>: cargada desde el ejecutable con páginas Read/Write.</td>
+          <td>Volátil (en RAM durante ejecución).</td>
+        </tr>
+        <tr>
+          <td><code>.bss</code></td>
+          <td><strong>RAM</strong>: no ocupa espacio en Flash; se llena con ceros al arrancar.</td>
+          <td><strong>RAM (Memoria Virtual)</strong>: páginas anónimas puestas a cero por el kernel al cargarse.</td>
+          <td>Volátil.</td>
+        </tr>
+        <tr>
+          <td><strong>Heap</strong></td>
+          <td><strong>RAM</strong>: entre el fin de BSS y el Stack.</td>
+          <td><strong>RAM (Memoria Virtual)</strong>: administrado por la libc mediante <code>brk</code> o <code>mmap</code>.</td>
+          <td>Volátil.</td>
+        </tr>
+        <tr>
+          <td><strong>Stack</strong></td>
+          <td><strong>RAM</strong>: desde el tope superior de la RAM física hacia abajo.</td>
+          <td><strong>RAM (Memoria Virtual)</strong>: asignado por el kernel para el hilo principal del proceso.</td>
+          <td>Volátil.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="note">
+      <span class="note-title">El código de arranque (Startup Code / Reset Handler)</span>
+      <p>Cuando un microcontrolador se enciende, la memoria RAM contiene basura aleatoria. Antes de ejecutar <code>main()</code>, el código de arranque (ensamblador de inicio o <code>crt0.s</code>) realiza dos tareas obligatorias por el estándar de C:</p>
+      <ol>
+        <li><strong>Copiar <code>.data</code>:</strong> copia los valores iniciales de las variables globales desde la Flash (dirección LMA, <em>Load Memory Address</em>) hacia sus direcciones en RAM (dirección VMA, <em>Virtual/Execution Memory Address</em>).</li>
+        <li><strong>Poner a cero <code>.bss</code>:</strong> ejecuta un bucle que llena de ceros (<code>0x00</code>) toda la región de memoria RAM reservada para BSS.</li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="comandos">
+    <h2>5. Cómo inspeccionar estas secciones con comandos</h2>
+
+    <p>Para ver el resumen agregado de secciones en un ejecutable o biblioteca:</p>
+
+    <pre><code>$ size build/building_process_demo
+   text    data     bss     dec     hex filename
+   7200     616     112    7928    1ef8 build/building_process_demo</code></pre>
+
+    <p>Para inspeccionar las secciones individuales y saber cuáles se cargan en memoria:</p>
+
+    <pre><code>$ size -A build/building_process_demo
+$ readelf -S -W build/building_process_demo</code></pre>
+
+    <p>En la salida de <code>readelf -S</code>, la bandera <strong><code>A</code></strong> (<em>Alloc</em>) indica que la sección se cargará en la memoria del programa al ejecutarse (como <code>.text</code>, <code>.rodata</code>, <code>.data</code> y <code>.bss</code>). Las secciones que no tienen la bandera <code>A</code> (como <code>.debug_info</code> o tablas de comentarios) se quedan únicamente en el archivo en disco y <strong>no consumen memoria RAM ni memoria cargada</strong>.</p>
+  </section>
+
+  <nav class="lesson-nav" aria-label="Navegación de la referencia">
+    <a href="../index.html">Índice de lecciones</a>
+    <a href="../lessons/0001-hito-1-compilar-y-enlazar.html">Volver a la lección 0001</a>
+    <a href="0001-compilacion-enlace-y-simbolos.html">Referencia 0001: Compilación, enlace y símbolos</a>
+  </nav>
+</main>
+</body>
+</html>

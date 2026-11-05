@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hitos 10 y 13: demos y versión</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+</head>
+<body>
+<main>
+  <p class="kicker">Preparación TP3 · Lección 0008</p>
+  <h1>Hitos 10 y 13: demos y versión</h1>
+  <p class="lead">Vas a reconocer el paso desde un programa de pruebas mezcladas a tres demos organizadas, y cómo <code>--version</code> termina antes de ejecutar esas demos.</p>
+  <section id="demos">
+    <h2>1. Separar las pruebas por responsabilidad</h2>
+    <p>Cuando todo el código de prueba está junto en <code>main</code>, se mezclan tareas distintas y cuesta localizar qué parte se está comprobando. El hito 10 organiza las pruebas en tres demos: matemática, strings y periféricos simulados. Cada una concentra una responsabilidad; <code>main</code> las coordina.</p>
+    <table><caption>Organización que refleja el proyecto</caption><thead><tr><th>Módulo</th><th>Responsabilidad</th></tr></thead><tbody>
+      <tr><td><code>demo_math.c</code></td><td>Ejercicios de funciones matemáticas.</td></tr><tr><td><code>demo_str.c</code></td><td>Operaciones sobre strings y CRC.</td></tr><tr><td><code>demo_embedded.c</code></td><td>UART simulada, ring, trama y timer.</td></tr><tr><td><code>main.c</code></td><td>Orquestar las demos, salvo cuando se solicita versión.</td></tr>
+    </tbody></table>
+    <p>En el flujo normal, el main final invoca cada demo una vez y en orden. Así, el programa conserva las pruebas existentes, pero el punto de entrada deja de contener sus detalles. El hito 10 cambia la organización; no es todavía el modo especial de versión del hito 13.</p>
+    <pre><code>// src/app/main.c: flujo normal
+demo_math();
+demo_str();
+demo_embedded();</code></pre>
+    <p>El Makefile del TP incluye el main y los tres archivos <code>src/demo/</code> entre las fuentes de la aplicación. Las utilidades y módulos HAL se compilan aparte, y con <code>USE_STATIC_LIB = 1</code> sus objetos se archivan en <code>libutils.a</code>. Cada demo tiene una función propia y <code>main</code> las llama y coordina durante la ejecución; no realiza el enlace, que corresponde a la construcción del ejecutable.</p>
+  </section>
+  <section id="version">
+    <h2>2. Agregar una salida de versión sin cambiar las demos</h2>
+    <p>Un usuario o script puede querer conocer la identidad y versión del ejecutable sin correr las demostraciones. El hito 13 define dos cadenas en <code>main.c</code> y reconoce el argumento <code>--version</code>.</p>
+    <pre><code>#include &lt;string.h&gt;
+
+static const char PROGRAM_NAME[] = "building-process";
+static const char PROGRAM_VERSION[] = "1.0.0";
+
+int main(int argc, char *argv[]) {
+  if (argc &gt; 1 &amp;&amp; strcmp(argv[1], "--version") == 0) {
+    print_str(PROGRAM_NAME);
+    print_str(" v");
+    print_str(PROGRAM_VERSION);
+    print_str("\n");
+    return 0;
+  }
+
+  demo_math();
+  demo_str();
+  demo_embedded();
+  return 0;
+}</code></pre>
+    <p><code>PROGRAM_NAME</code> y <code>PROGRAM_VERSION</code> son arrays de caracteres constantes, declarados con alcance de archivo, duración estática y enlace interno por <code>static</code>. No son macros de preprocesador definidas con <code>-D</code>. <code>argc</code> cuenta los argumentos, incluyendo el nombre de invocación en el caso habitual; <code>argv[0]</code> corresponde a ese nombre y el primer argumento del usuario está en <code>argv[1]</code>.</p>
+    <p>La condición <code>argc &gt; 1</code> asegura que haya una cadena de argumento para comparar. Sin argumentos de usuario, normalmente <code>argc = 1</code> y <code>argv[1] = NULL</code>, porque <code>argv[argc]</code> es el puntero nulo final: no se debe pasarlo a <code>strcmp</code>. No es que ese elemento del array no pueda consultarse, sino que no apunta a una cadena válida para esta comparación.</p>
+    <p><code>strcmp</code> compara el contenido de dos cadenas y devuelve cero cuando son iguales. No se comparan las direcciones de los punteros: dos textos iguales pueden residir en lugares distintos. El <code>&amp;&amp;</code> evalúa primero el control de cantidad; si es falso, no evalúa el acceso a <code>argv[1]</code>. Si el argumento coincide, se imprimen nombre y versión y <code>return 0</code> sale de <code>main</code>, por lo que ninguna demo se ejecuta.</p>
+    <pre><code>$ ./build/building_process_demo --version
+$ strings -a build/building_process_demo | grep building-process</code></pre>
+    <p>El primer comando ejecuta el programa solicitando la versión; la salida esperada por el código es <code>building-process v1.0.0</code>. El segundo inspecciona el archivo con <code>strings -a</code>, que busca secuencias imprimibles a lo largo de todo el archivo. El pipe <code>|</code> pasa su salida a <code>grep</code>, que conserva las líneas donde aparece <code>building-process</code>. Encontrar el nombre demuestra que la cadena está presente, pero no que la rama se ejecute; para eso se observa la ejecución con el argumento. La búsqueda por defecto de <code>strings</code> puede variar según su configuración, por eso aquí se explicita <code>-a</code>.</p>
+  </section>
+  <section id="traza">
+    <h2>3. Seguir los dos caminos de main</h2>
+    <table><caption>Traza conceptual de argumentos</caption><thead><tr><th>Invocación</th><th>Condición</th><th>Camino</th></tr></thead><tbody>
+      <tr><td><code>./programa</code></td><td><code>argc</code> no es mayor que 1</td><td>No lee <code>argv[1]</code>; ejecuta las tres demos.</td></tr>
+      <tr><td><code>./programa --version</code></td><td>Hay argumento y <code>strcmp</code> devuelve 0</td><td>Imprime nombre y versión; retorna antes de las demos.</td></tr>
+      <tr><td><code>./programa otro</code></td><td>Hay argumento pero no coincide</td><td>La condición falla y sigue el flujo normal de demos.</td></tr>
+    </tbody></table>
+    <p>El cuadro describe el control del código. En la primera fila importa el cortocircuito de <code>&amp;&amp;</code>: la mitad derecha solo se evalúa si existe un argumento de usuario.</p>
+    <h3>Una explicación oral posible</h3>
+    <blockquote id="oral"><p>«En el hito 10, las pruebas pasan a tres funciones de demo y main las llama en orden. En el hito 13, dos arrays constantes guardan nombre y versión. Main comprueba primero que haya argumento y luego compara el contenido de argv[1] con --version mediante strcmp. Si coincide imprime y retorna, evitando las demos; en caso contrario ejecuta el camino habitual».</p></blockquote>
+  </section>
+  <section id="preguntas">
+    <h2>4. Comprobá lo que aprendiste</h2>
+    <form data-quiz>
+      <fieldset data-question><legend>P1. ¿Qué hace el main en el flujo normal?</legend>
+        <label><input id="q1-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> Llama demo_math, demo_str y demo_embedded en ese orden de ejecución.</label>
+        <label><input id="q1-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> Ejecuta únicamente demo_embedded y termina inmediatamente después de esa llamada.</label>
+        <label><input id="q1-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> Mantiene todas las pruebas dentro de una función main extensa.</label>
+        <label><input id="q1-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> Llama primero a versión y luego siempre ejecuta todas demos.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correcta: A.</strong> En el camino normal, main orquesta las tres funciones en ese orden. B omite dos demos. C contradice la separación del hito 10. D inventa una llamada obligatoria a versión: la rama ocurre solamente ante el argumento correspondiente.</p></div>
+      </fieldset>
+      <fieldset data-question><legend>P2. ¿Cómo están declarados el nombre y versión?</legend>
+        <label><input id="q2-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> Son arrays de caracteres constantes declarados con duración estática aquí.</label>
+        <label><input id="q2-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> Son macros definidas mediante argumentos del compilador para esta construcción.</label>
+        <label><input id="q2-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> Son variables externas modificables desde todas las bibliotecas del programa.</label>
+        <label><input id="q2-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> Son valores que main obtiene consultando argv automáticamente al iniciar.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correcta: A.</strong> La fuente declara arrays <code>static const char</code> fuera de funciones: tienen duración estática, alcance de archivo y enlace interno. B confunde arrays con macros <code>-D</code>. C ignora el enlace interno y <code>const</code>. D describe otro origen: las cadenas están definidas en el código.</p></div>
+      </fieldset>
+      <fieldset data-question><legend>P3. ¿Por qué se comprueba argc antes de argv[1]?</legend>
+        <label><input id="q3-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> Asegura que exista una cadena de argumento antes de compararla.</label>
+        <label><input id="q3-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> Garantiza que argv[1] contiene siempre una cadena de versión válida.</label>
+        <label><input id="q3-c" type="checkbox" data-correct="false"> <span class="option-letter">C.</span> Hace que strcmp compare direcciones en vez de contenido textual.</label>
+        <label><input id="q3-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> Convierte argv[0] en el argumento especial llamado --version al iniciar.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correcta: A.</strong> Con <code>argc &gt; 1</code> se sabe que existe argumento de usuario en <code>argv[1]</code>. B no garantiza qué texto contiene. C: <code>strcmp</code> compara contenido. D confunde el nombre de invocación en <code>argv[0]</code> con el argumento.</p></div>
+      </fieldset>
+      <fieldset data-question><legend>P4. ¿Qué efecto tiene strcmp y el retorno temprano?</legend>
+        <label><input id="q4-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> strcmp devuelve cero cuando ambas cadenas contienen exactamente igual texto.</label>
+        <label><input id="q4-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> strcmp devuelve cero únicamente cuando los punteros tienen idéntica dirección.</label>
+        <label><input id="q4-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> El return evita ejecutar demos tras mostrar la versión solicitada.</label>
+        <label><input id="q4-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> El return imprime versión después de completar todas demos primero.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y C.</strong> <code>strcmp</code> devuelve cero para contenido igual, no por igualdad de direcciones. El <code>return 0</code> termina main dentro de la rama, antes de las llamadas a demos. D invierte el orden real.</p></div>
+      </fieldset>
+      <fieldset data-question><legend>P5. ¿Qué demuestra la búsqueda con strings -a?</legend>
+        <label><input id="q5-a" type="checkbox" data-correct="true"> <span class="option-letter">A.</span> Puede encontrar el texto building-process dentro del archivo binario inspeccionado.</label>
+        <label><input id="q5-b" type="checkbox" data-correct="false"> <span class="option-letter">B.</span> Comprueba por sí sola que la rama version funciona correctamente.</label>
+        <label><input id="q5-c" type="checkbox" data-correct="true"> <span class="option-letter">C.</span> La opción -a pide buscar texto en todo el archivo.</label>
+        <label><input id="q5-d" type="checkbox" data-correct="false"> <span class="option-letter">D.</span> Ejecuta el programa pasando --version como argumento automáticamente al inspeccionarlo.</label>
+        <div data-feedback hidden><p data-verdict></p><p><strong>Correctas: A y C.</strong> <code>strings -a</code> busca cadenas imprimibles a lo largo del archivo; <code>grep</code> filtra por el nombre. B es falsa: encontrar una cadena no ejecuta ni verifica la rama. D confunde inspección del archivo con ejecución.</p></div>
+      </fieldset>
+      <button type="submit">Comprobar respuestas</button><p data-quiz-summary role="status" aria-live="polite"></p>
+    </form>
+  </section>
+  <p class="source"><span class="note-title">Fuentes</span> <a href="../tps/tp3/trabajo_practico/README.md">Consigna TP3</a>, hitos 10 y 13; <a href="../tps/tp3/trabajo_practico/src/app/main.c">main.c</a>; <a href="../tps/tp3/trabajo_practico/src/demo/demo.h">demo.h</a>; <a href="../tps/tp3/trabajo_practico/src/demo/demo_math.c">demo_math.c</a>; <a href="../tps/tp3/trabajo_practico/src/demo/demo_str.c">demo_str.c</a>; <a href="../tps/tp3/trabajo_practico/src/demo/demo_embedded.c">demo_embedded.c</a>; <a href="../tps/tp3/trabajo_practico/Makefile">Makefile</a>; <a href="https://sourceware.org/binutils/docs/binutils/strings.html">GNU strings</a>; <a href="https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf">borrador público C11, N1570</a>, §§5.1.2.2.1 (argumentos de main), 6.5.13 (AND lógico) y 7.24.4.2 (strcmp).</p>
+  <nav class="lesson-nav" aria-label="Navegación de la lección"><a href="../index.html">Índice de lecciones</a><a href="0007-hitos-8-9-timer-y-trama.html">Lección anterior</a><a href="#demos">Volver al inicio</a><a href="0009-hito-11-biblioteca-estatica.html">Lección siguiente</a></nav>
+</main>
+</body>
+</html>
