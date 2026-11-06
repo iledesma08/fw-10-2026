@@ -5,7 +5,7 @@ module testbench;
 
     reg clk = 1;
     reg resetn = 0;
-    wire trap;
+    wire trap = u_top.trap;
     reg [63:0]clock_counts ;
     always #5 clk = ~clk;
 

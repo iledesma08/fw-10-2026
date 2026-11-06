@@ -13,6 +13,10 @@ docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD":/work -w /work fw-env:l
 
 Las simulaciones completas se ejecutaron con `VER_FLAGS="--binary -Wno-fatal -f filelist.f"` para no generar grandes waveforms. Esto cambia la instrumentación de trazas, no el firmware ni la configuración del core. No se modificaron project_config.def, fw_image.h, startup.S, linker.ld ni los C protegidos print.c/test_fw_status.c.
 
+### Excepción de RTL autorizada
+
+La plataforma inicial tenía `wire trap;` sin conexión en rtl/testbench.sv. El testbench esperaba 0xFF o ese cable, por lo que una instrucción ebreak del core no terminaba el caso negativo. Se observó FAIL en standalone test_data_bss y la simulación seguía corriendo. El usuario autorizó explícitamente cambiarlo a `wire trap = u_top.trap;`. Se repitieron las pruebas después de esa única corrección del RTL. No se considera un fallo del firmware ni se simula éxito escribiendo 0xFF ante un error.
+
 ## Hito 1 — Reconocimiento del arranque original
 
 ### 1. Primera instrucción, ubicación y orden de enlace
