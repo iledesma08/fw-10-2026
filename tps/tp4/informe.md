@@ -80,3 +80,22 @@ El BL comprueba magic, load_addr, tamaño, CRC, SP y entry, en ese orden. Primer
 CRC-8 usa polinomio 0x07 e inicio 0xFF y cubre offsets [0x10,image_size), excluyendo su propio campo. Se compara el resultado con el campo completo de 32 bits. SP exige 0x20000 < sp ≤ 0x40000, múltiplo de 16; entry exige base+0x18 ≤ entry < base+size, múltiplo de cuatro. El stack inicialmente vacío puede estar en el extremo superior porque crece hacia abajo.
 
 En error, UART informa la causa, REG_FW_REPORT combina BL_REPORT_ERROR con el código, REG_FW_STATUS recibe 0xBAD y bl_halt ejecuta ebreak. El caso CORRUPT=1 informó CRC inválido y terminó por trap, sin ejecutar el FW, en 482283 ciclos.
+
+## Hito 8 — Cinco comprobaciones
+
+Las direcciones de datos siguientes corresponden a APP_SRC="print.c test_data_bss.c"; no se mezclan con la imagen final de test_fw_status.
+
+1. **HEX y mapas:** BL en línea 1; magic del header en línea 1025. Dirección=4×(N−1). Campo CRC en 0x100C/línea 1028; puntero de reset en 0x1014/línea 1030. El log usa índice de palabra hexadecimal: 0x400 es dirección 0x1000, no dirección 0x400.
+2. **Inspección:** objdump -d del BL muestra j a bl_reset_handler en cero y j a bl_unexpected en 0x10. objdump -s -j .fw_header del app muestra los seis campos. El ELF todavía contiene FFFFFFFF en image_crc; el HEX contiene el CRC calculado.
+3. **Entrada:** símbolo Reset_Handler=0x1018, Entry point=0x1018 y palabra en 0x1014=0x1018. El reset físico del core sigue siendo cero; el BL lee ese campo y salta.
+4. **Datos:** .data tiene VMA 0x20000, LMA 0x16CC y tamaño 0x14. _sdata=0x20000, _edata=0x20014 y _sidata=0x16CC. .bss ocupa [0x20014,0x20058), tamaño 0x44. La imagen llega hasta 0x16E0 y __fw_size=0x6E0. El test compara valores y declara PASS.
+5. **Carga:** después de simular esa misma imagen, make -C fw check informó RESULTADO: OK. Se compararon palabras del HEX con loading del log. Eso verifica la carga y los predicados del script, no sustituye el test de ejecución.
+
+Comandos de inspección:
+
+```sh
+make -C fw inspect APP_SRC="print.c test_data_bss.c"
+riscv64-unknown-elf-readelf -S -l -W fw/build/app.elf
+riscv64-unknown-elf-nm -n fw/build/app.elf
+make -C fw check
+```
