@@ -1,39 +1,43 @@
-/*
- * app.ld -- TP4 (Bloque 4): linker script del FW del TP anterior cuando corre
- * detras del bootloader. Partan de ../linker.ld y de la diapo 4.
- *
- * COMPLETAR los TODO (hito 3).
- */
+/* Layout del firmware y límites usados por el startup. */
 ENTRY(Reset_Handler)
-
 INCLUDE memory_map.ld
-
 SECTIONS
 {
+  .fw_header ORIGIN(APP_ROM) : {
+    __fw_start = .;             /* dirección inicial de imagen */
+    KEEP(*(.fw_header))         /* datos leídos por el BL */
+  } > APP_ROM
   .text : {
-    /* TODO: __fw_start y el header + vector table del FW (seccion .fw_header
-     *       de app_startup.S) PRIMERO, al inicio de APP_ROM. ¿Por que KEEP? */
+    KEEP(*(.text.Reset_Handler)) /* primer código tras header */
     *(.text .text.*)
-    *(.rodata .rodata.*)
-    /* TODO: ¿que otra seccion de solo lectura genera GCC en RISC-V? (hito 1) */
     . = ALIGN(4);
   } > APP_ROM
-
-  /* TODO: .data
-   *   - VMA en RAM, LMA dentro de APP_ROM (AT>)
-   *   - simbolos _sdata / _edata (VMA) y _sidata (LMA, ver LOADADDR)
-   *   - incluir tambien .sdata (globales chicas)                          */
-
-  /* TODO: .bss
-   *   - en RAM, sin ocupar lugar en la imagen (NOLOAD)
-   *   - simbolos _sbss / _ebss
-   *   - incluir tambien .sbss y COMMON                                    */
-
+  .rodata : {
+    *(.rodata .rodata.* .srodata .srodata.*)
+    . = ALIGN(4);
+  } > APP_ROM
+  .data : {
+    . = ALIGN(4);
+    _sdata = .;
+    *(.data .data.* .sdata .sdata.*)
+    . = ALIGN(4);
+    _edata = .;
+  } > RAM AT> APP_ROM
+  _sidata = LOADADDR(.data);
+  .bss (NOLOAD) : {
+    . = ALIGN(4);
+    _sbss = .;
+    *(.bss .bss.* .sbss .sbss.*)
+    *(COMMON)
+    . = ALIGN(4);
+    _ebss = .;
+  } > RAM
   /DISCARD/ : { *(.eh_frame .eh_frame_hdr) }
 }
-
-/* TODO: simbolos que usa el header (fw_image.h) y el arranque:
- *   __fw_end   = fin de la imagen cargable (¿donde termina la copia de .data?)
- *   __fw_size  = __fw_end - __fw_start
- *   _stack_top = tope de la RAM
- * TODO: ASSERT que verifique que .data + .bss dejan lugar para el stack. */
+__fw_end = LOADADDR(.data) + SIZEOF(.data);
+__fw_size = __fw_end - __fw_start;
+_stack_top = ORIGIN(RAM) + LENGTH(RAM);
+ASSERT(ADDR(.fw_header) == ORIGIN(APP_ROM), "Header desplazado")
+ASSERT(SIZEOF(.fw_header) == 24, "Header incorrecto")
+ASSERT(__fw_end <= ORIGIN(APP_ROM) + LENGTH(APP_ROM), "Imagen grande")
+ASSERT(_ebss <= _stack_top - 4096, "Sin reserva de stack")
