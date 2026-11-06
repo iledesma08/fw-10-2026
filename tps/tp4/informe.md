@@ -56,3 +56,19 @@ La simulación standalone terminó con 0xFF en 13876 ciclos. La UART del test or
 - app.ld ubica seis campos de header primero en 0x1000, Reset_Handler en 0x1018, y las familias pequeñas de datos junto a .data/.bss. Publica límites de copia/limpieza y calcula tamaño según bytes cargables. Reserva 4096 bytes mínimos de pila como decisión de implementación; no mide su máximo consumo.
 - Startup: carga sp, copia palabras entre límites alineados, limpia ceros y llama a main. Ambos bucles aceptan rangos vacíos. Si main retorna sin 0xFF ejecuta ebreak; si ya declaró éxito queda en un bucle seguro.
 - bl_jump recibe stack en a0 y entry en a1, carga sp, limpia ra y salta mediante jr sin enlace al BL. La UART anuncia BL y entrada antes de ejecutar el FW.
+
+## Hito 6 — Inicialización de .data y .bss
+
+```sh
+make -C fw sim APP_SRC="print.c test_data_bss.c" VER_FLAGS="--binary -Wno-fatal -f filelist.f"
+make -C fw sim STANDALONE=1 APP_SRC="print.c test_data_bss.c" VER_FLAGS="--binary -Wno-fatal -f filelist.f"
+```
+
+| Variante | Valor observado tp4_data_word | Resultado |
+|---|---|---|
+| Combinada | 0x1234ABCD | PASS, estado 0xFF |
+| Standalone | 0x00000000 | FAIL en palabra y array inicializados, trap |
+
+El array inicializado debe contener {1,2,3,4}; el test recorre esos elementos y los objetos sin inicializador, y solo escribe PASS si todas las comparaciones coinciden. En la combinada se observó PASS. En standalone se observaron ambos mensajes de inicializadores ausentes. La diferencia es consistente con la copia de .data/.sdata del startup nuevo, ausente en el original.
+
+Observar ceros en .bss no prueba por sí solo que el startup haya limpiado: la RAM del modelo ya puede estar en cero. La inspección del bucle y los límites respalda qué hace el código, sin generalizar el estado inicial del simulador a RAM física.
