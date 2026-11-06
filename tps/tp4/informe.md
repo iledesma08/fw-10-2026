@@ -51,3 +51,4 @@ La simulación standalone terminó con 0xFF en 13876 ciclos. La UART del test or
 - BL: cinco saltos de cuatro bytes, primer vector en 0x0 e IRQ defensiva en 0x10; .option norvc mantiene offsets. bl_reset_handler carga la pila y llama a C.
 - app.ld ubica seis campos de header primero en 0x1000, Reset_Handler en 0x1018, y las familias pequeñas de datos junto a .data/.bss. Publica límites de copia/limpieza y calcula tamaño según bytes cargables. Reserva 4096 bytes mínimos de pila como decisión de implementación; no mide su máximo consumo.
 - Startup: carga sp, copia palabras entre límites alineados, limpia ceros y llama a main. Ambos bucles aceptan rangos vacíos. Si main retorna sin 0xFF ejecuta ebreak; si ya declaró éxito queda en un bucle seguro.
+- bl_jump recibe stack en a0 y entry en a1, carga sp, limpia ra y salta mediante jr sin enlace al BL. La UART anuncia BL y entrada antes de ejecutar el FW.

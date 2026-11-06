@@ -1,7 +1,7 @@
 /*
  * bl_start.S — TP4 (Bloque 4): vector table + arranque mínimo del BOOTLOADER
  *
- * Vectores y stack mínimo del bootloader (hito 2).
+ * Vectores, stack mínimo y transferencia sin retorno (hitos 2 y 5).
  *
  * Datos de la plataforma (platform/rtl/top.v, parámetros de picorv32):
  *   - PROGADDR_RESET = 0x0000_0000: al salir de reset el core EJECUTA lo que hay ahí.
@@ -48,14 +48,9 @@ bl_reset_handler:
     .globl  bl_jump
     .type   bl_jump, @function
 bl_jump:
-    /* TODO (hito 5): pasarle el control al FW.
-     *   - Se llama desde C: ¿en qué registros llegan sp y entry según la ABI ILP32?
-     *   - Cargar el SP que pide el FW y SALTAR a su Reset_Handler.
-     *   - Pregunta: ¿salto con link (jalr ra) o sin link (jr)? ¿Qué conviene
-     *     dejar en ra?
-     */
-
-    j       bl_unexpected
+    mv sp, a0          # adoptar el stack solicitado por el FW
+    li ra, 0           # quitar una continuación residual hacia el BL
+    jr a1              # saltar al Reset_Handler, sin guardar retorno
     .size   bl_jump, . - bl_jump
 
 /* ------------------------------------------------------------------------ */
