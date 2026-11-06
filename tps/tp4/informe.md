@@ -45,3 +45,7 @@ Las globales quedaron en .sbss: int_2=0x20000, int_1=0x20004 e int_0=0x20008. La
 El arranque original prepara sp y llama a main, pero no copia valores inicializados desde ROM a RAM ni limpia .bss/.sbss. El testbench carga memory_i, no realiza esas tareas sobre memory_d. En esta configuración del simulador, el estado inicial de RAM puede ocultar la falta de limpieza. El test_fw_status no compara resultados numéricos de sus globales ni exige valores iniciales no nulos: alcanza a escribir 0xFF aunque no pruebe el entorno completo de C.
 
 La simulación standalone terminó con 0xFF en 13876 ciclos. La UART del test original mostró repeticiones/cortes al imprimir índices, que no se corrigieron modificando los archivos protegidos. La observación de 0xFF demuestra la finalización declarada por ese test; no demuestra inicialización general correcta. El caso del hito 6 discrimina esa diferencia.
+
+## Hitos 2–5 — Implementación realizada
+
+- BL: cinco saltos de cuatro bytes, primer vector en 0x0 e IRQ defensiva en 0x10; .option norvc mantiene offsets. bl_reset_handler carga la pila y llama a C.

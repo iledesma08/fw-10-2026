@@ -1,7 +1,7 @@
 /*
  * bl_start.S — TP4 (Bloque 4): vector table + arranque mínimo del BOOTLOADER
  *
- * COMPLETAR los TODO (hitos 2 y 5 de la consigna).
+ * Vectores y stack mínimo del bootloader (hito 2).
  *
  * Datos de la plataforma (platform/rtl/top.v, parámetros de picorv32):
  *   - PROGADDR_RESET = 0x0000_0000: al salir de reset el core EJECUTA lo que hay ahí.
@@ -21,13 +21,11 @@
     .globl  _bl_vectors
     .type   _bl_vectors, @function
 _bl_vectors:
-    /* TODO (hito 2): la vector table.
-     *   - En 0x00 (PROGADDR_RESET): un salto a bl_reset_handler.
-     *   - En 0x10 (PROGADDR_IRQ):   un salto a bl_unexpected.
-     *   - 0x04, 0x08 y 0x0C no son vectores en PicoRV32: ¿qué conviene poner?
-     *   Pregunta: ¿por qué acá la vector table son INSTRUCCIONES y en Cortex-M
-     *   son DIRECCIONES? */
-
+    j bl_reset_handler  # offset 0x00: arranque normal
+    j bl_unexpected     # offset 0x04: hueco defensivo
+    j bl_unexpected     # offset 0x08: hueco defensivo
+    j bl_unexpected     # offset 0x0C: hueco defensivo
+    j bl_unexpected     # offset 0x10: entrada IRQ
     .size   _bl_vectors, . - _bl_vectors
     .option pop
 
@@ -38,14 +36,8 @@ _bl_vectors:
     .globl  bl_reset_handler
     .type   bl_reset_handler, @function
 bl_reset_handler:
-    /* TODO (hito 2):
-     *   1) Cargar sp con _bl_stack_top (lo define bl.ld). ¿Por qué lo tiene que
-     *      hacer el software?
-     *   2) .data/.bss del BL: si el BL no usa variables globales, no hay nada
-     *      que copiar ni poner en cero (¿cómo garantizan que no las use?).
-     *   3) Llamar a bl_main(), que no vuelve.
-     */
-
+    la sp, _bl_stack_top  # dirección del extremo superior de RAM
+    call bl_main         # invoca C y guarda retorno en ra
     j       bl_unexpected           /* si bl_main volviera (o mientras no esté hecho): FAIL */
     .size   bl_reset_handler, . - bl_reset_handler
 
