@@ -53,6 +53,7 @@ La simulación standalone terminó con 0xFF en 13876 ciclos. La UART del test or
 ## Hitos 2–5 — Implementación realizada
 
 - BL: cinco saltos de cuatro bytes, primer vector en 0x0 e IRQ defensiva en 0x10; .option norvc mantiene offsets. bl_reset_handler carga la pila y llama a C.
+- bl.ld conserva .vectors primero con KEEP. Captura .data/.sdata y .bss/.sbss/COMMON con KEEP y exige tamaño cero mediante ASSERT, incluso frente a eliminación de secciones. Las constantes pueden permanecer en ROM.
 - app.ld ubica seis campos de header primero en 0x1000, Reset_Handler en 0x1018, y las familias pequeñas de datos junto a .data/.bss. Publica límites de copia/limpieza y calcula tamaño según bytes cargables. Reserva 4096 bytes mínimos de pila como decisión de implementación; no mide su máximo consumo.
 - Startup: carga sp, copia palabras entre límites alineados, limpia ceros y llama a main. Ambos bucles aceptan rangos vacíos. Si main retorna sin 0xFF ejecuta ebreak; si ya declaró éxito queda en un bucle seguro.
 - bl_jump recibe stack en a0 y entry en a1, carga sp, limpia ra y salta mediante jr sin enlace al BL. La UART anuncia BL y entrada antes de ejecutar el FW.
@@ -99,3 +100,55 @@ riscv64-unknown-elf-readelf -S -l -W fw/build/app.elf
 riscv64-unknown-elf-nm -n fw/build/app.elf
 make -C fw check
 ```
+
+## Hito 9 — Preguntas del informe
+
+### 1. PicoRV32 frente a Cortex-M
+
+PicoRV32 comienza a ejecutar instrucciones desde PROGADDR_RESET; por eso necesita un salto en 0x0. En Cortex-M del ejemplo de clase, el hardware lee la primera palabra como SP inicial y la segunda como dirección de reset. Son direcciones, no instrucciones de salto. El header del FW almacena datos de ese estilo, pero aquí los interpreta el BL por software. No se atribuye mtvec al mecanismo específico de este PicoRV32.
+
+### 2. Pasos del Makefile
+
+GCC compila y enlaza bl.elf y app.elf según scripts diferentes; objcopy extrae binarios; mkimage comprueba el formato, completa CRC, agrega relleno y combina; hexdump representa palabras; install copia a fw/fw.hex; sim ejecuta Verilator y el testbench carga ese archivo.
+
+**¿Por qué ELF separados?** BL y FW tienen regiones, entradas y responsabilidades diferentes. Se pueden inspeccionar sin resolver accidentalmente sus funciones entre sí. El contrato de transferencia es el header más la ABI del salto.
+
+**¿Qué dirección usa objcopy -O binary para .data?** La LMA; por eso los bytes iniciales quedan dentro de la imagen ROM y no se crea un enorme hueco hasta su VMA de RAM. No conserva tablas de símbolos ni depuración como datos del programa.
+
+**¿Qué agrega mkimage entre BL y FW?** Bytes cero hasta load_addr=0x1000. Si se ejecutan, esas palabras son instrucciones ilegales en esta configuración. También puede agregar relleno final hasta múltiplo de cuatro y completar el CRC dentro del header.
+
+### 3. Diferencia en la palabra 0x100C
+
+app.elf contiene el marcador FW_IMAGE_CRC_UNSET=0xFFFFFFFF. El empaquetador escribe el CRC calculado en el binario combinado después del enlace, y no modifica el ELF. En la imagen final sana se observó 0x000000F7; en la variante test_data_bss, 0x00000097. La discrepancia con el marcador del ELF es intencional. El campo es de 32 bits aunque el CRC tenga ocho; sus bits altos deben quedar en cero.
+
+### 4. Comparar el FW anterior y el relinkeado
+
+Se compararon instrucciones de los programas generados desde las mismas fuentes locales, sin traer soluciones de otra rama. El standalone empieza con su propio startup en cero; la imagen nueva añade el header y el startup completo en 0x1018. No se pueden comparar las líneas del FW como si solo se hubiera agregado un desplazamiento fijo: hay código añadido y secciones reorganizadas.
+
+Comparación concreta medida: print_str empieza en 0xB4 en standalone y en 0x1130 en el FW nuevo. Su instrucción lbu a5,0(a0) mantiene la palabra 00054783; su salto final mantiene F35FF06F aunque cambia el destino absoluto de 0x10 a 0x108C. En main, la dirección de la cadena inicial cambia: standalone usa li a0,928 (0x3A0); el FW usa lui a0,0x1 y addi a0,a0,1064 para formar 0x1428. El salto de dirección absoluta de la cadena necesita instrucciones distintas y cambia el tamaño/orden local.
+
+En una función de C equivalente, operaciones sobre registros como lbu a5,0(a0) conservan codificación si no cambian sus operandos. Saltos relativos pueden conservar su desplazamiento si origen y destino se mueven juntos; referencias absolutas deben ajustarse a nuevas direcciones. La relajación del linker también puede cambiar instrucciones. El ELF y el HEX no son intercambiables: el HEX nuevo ya incluye el CRC post-enlace.
+
+### 5. jr frente a jalr ra y recarga de stack
+
+bl_jump es un traspaso sin retorno. jr a1 equivale a jalr x0,0(a1), no guarda una dirección de vuelta al BL. Cambiar sp abandona la pila del BL: no se debe intentar volver al epílogo C anterior. ra se limpia para no conservar un retorno residual, pero el startup sigue siendo responsable de manejar la vuelta de main.
+
+El FW recarga sp para establecer por sí mismo el entorno de entrada, incluso si BL dejó el mismo valor. Esto no inicializa .data ni .bss: esas tareas tienen bucles separados.
+
+### 6. Éxito y error
+
+El BL no escribe 0xFF porque el testbench lo interpreta como finalización exitosa y podría terminar antes de ejecutar el FW. La aplicación declara su éxito. 0xBAD solo comunica fallo: la condición del testbench es 0xFF o trap. Por eso se necesita ebreak/bl_halt, y fue necesario conectar correctamente trap en el testbench mediante la excepción autorizada.
+
+### 7. Funciones de strutils y ausencia de libc
+
+La versión local de strutils.c solo define str_crc8. nm del BL confirma que queda str_crc8: bl_main la llama. -ffunction-sections separa funciones y --gc-sections conserva las alcanzables y elimina las no usadas; compilar un archivo no obliga a incluir todo su contenido. Si se usara una biblioteca más extensa, el resultado dependería de sus referencias y optimización. El BL no enlaza libc; su CRC no llama a malloc, printf ni otras funciones de esa biblioteca. -lgcc aporta auxiliares del compilador, no libc.
+
+### 8. Compresión de instrucciones
+
+rv32ic permite instrucciones de dos bytes, y un ensamblador puede comprimir saltos. Si la tabla supone cinco instrucciones consecutivas de cuatro bytes y no usa .option norvc, el salto de IRQ podría no quedar en 0x10. La tabla del BL fuerza instrucciones de cuatro bytes y el flujo actual lo compila rv32i; no se modificó COMPRESSED_ISA del RTL para este TP.
+
+## Cierre de entrega y límites
+
+Logs reales exigidos: [simulación sana](entrega-sano.log) y [simulación corrupta](entrega-corrupto.log). La imagen final queda sana, con el test_fw_status por defecto; se regeneró y se repitieron sim y check después de CORRUPT=1. Resultado final: 0xFF y RESULTADO: OK, 497229 ciclos. Los artefactos de fw/build corresponden a ese último flujo sano; los números del hito 8 con test_data_bss están anotados arriba como una variante diferente.
+
+Los tests no certifican autenticidad ni ausencia de todos los errores; el CRC protege integridad accidental. No se realizó el extra opcional de rendimiento ni se modificaron parámetros de CPU. La reserva de pila de 4096 bytes es estática y no constituye análisis de peor caso.
