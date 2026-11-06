@@ -64,11 +64,19 @@ make -C fw sim APP_SRC="print.c test_data_bss.c" VER_FLAGS="--binary -Wno-fatal 
 make -C fw sim STANDALONE=1 APP_SRC="print.c test_data_bss.c" VER_FLAGS="--binary -Wno-fatal -f filelist.f"
 ```
 
-| Variante | Valor observado tp4_data_word | Resultado |
-|---|---|---|
-| Combinada | 0x1234ABCD | PASS, estado 0xFF |
-| Standalone | 0x00000000 | FAIL en palabra y array inicializados, trap |
+| Variante | Valor observado tp4_data_word | Resultado | Ciclos |
+|---|---|---|---|
+| Combinada | 0x1234ABCD | PASS, estado 0xFF | 776217 |
+| Standalone | 0x00000000 | FAIL en palabra y array inicializados, trap | 16028 |
 
 El array inicializado debe contener {1,2,3,4}; el test recorre esos elementos y los objetos sin inicializador, y solo escribe PASS si todas las comparaciones coinciden. En la combinada se observó PASS. En standalone se observaron ambos mensajes de inicializadores ausentes. La diferencia es consistente con la copia de .data/.sdata del startup nuevo, ausente en el original.
 
 Observar ceros en .bss no prueba por sí solo que el startup haya limpiado: la RAM del modelo ya puede estar en cero. La inspección del bucle y los límites respalda qué hace el código, sin generalizar el estado inicial del simulador a RAM física.
+
+## Hito 7 — Validación y fallos
+
+El BL comprueba magic, load_addr, tamaño, CRC, SP y entry, en ese orden. Primero exige 0x18 ≤ size ≤ capacidad del slot, antes de usarlo para recorrer memoria. Así la resta del intervalo CRC no queda negativa y la suma con la base fija no desborda.
+
+CRC-8 usa polinomio 0x07 e inicio 0xFF y cubre offsets [0x10,image_size), excluyendo su propio campo. Se compara el resultado con el campo completo de 32 bits. SP exige 0x20000 < sp ≤ 0x40000, múltiplo de 16; entry exige base+0x18 ≤ entry < base+size, múltiplo de cuatro. El stack inicialmente vacío puede estar en el extremo superior porque crece hacia abajo.
+
+En error, UART informa la causa, REG_FW_REPORT combina BL_REPORT_ERROR con el código, REG_FW_STATUS recibe 0xBAD y bl_halt ejecuta ebreak. El caso CORRUPT=1 informó CRC inválido y terminó por trap, sin ejecutar el FW, en 482283 ciclos.
