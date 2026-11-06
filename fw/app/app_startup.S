@@ -2,7 +2,7 @@
  * app_startup.S — TP4 (Bloque 4): arranque del FW cuando corre detrás del BL.
  * Reemplaza a ../startup.S (que no se toca).
  *
- * COMPLETAR los TODO (hito 4).
+ * Header, copia de datos y limpieza antes de main (hito 4).
  */
 #include "fw_image.h"
 
@@ -17,17 +17,12 @@
     .globl  __fw_header
     .type   __fw_header, @object
 __fw_header:
-    /* TODO: los 6 campos de fw_image.h, en orden (.word = 4 bytes en RISC-V).
-     *   0x00 magic, 0x04 load_addr, 0x08 image_size, 0x0C image_crc,
-     *   0x10 initial_sp, 0x14 reset_handler.
-     *   ¿Cuáles salen de símbolos del linker? ¿Qué valor ponen en image_crc,
-     *   si lo escribe tools/mkimage.py DESPUÉS de linkear? */
-    .word   0                       /* 0x00 magic          (TODO) */
-    .word   0                       /* 0x04 load_addr      (TODO) */
-    .word   0                       /* 0x08 image_size     (TODO) */
-    .word   0                       /* 0x0C image_crc      (TODO) */
-    .word   0                       /* 0x10 initial_sp     (TODO) */
-    .word   0                       /* 0x14 reset_handler  (TODO) */
+    .word FW_IMAGE_MAGIC       # marca de formato
+    .word __fw_start           # base definida por linker
+    .word __fw_size            # bytes de imagen cargable
+    .word FW_IMAGE_CRC_UNSET   # pendiente: 0xFFFFFFFF
+    .word _stack_top           # pila solicitada por FW
+    .word Reset_Handler        # dirección de su startup
     .size   __fw_header, . - __fw_header
 
 /* ------------------------------------------------------------------------ */
@@ -38,14 +33,32 @@ __fw_header:
     .globl  Reset_Handler
     .type   Reset_Handler, @function
 Reset_Handler:
-    /* TODO:
-     *   1) sp = _stack_top. ¿Hace falta si el BL ya lo cargó desde la vector table?
-     *   2) copiar .data: palabra por palabra de _sidata (LMA) a _sdata.._edata (VMA).
-     *   3) poner .bss en cero: _sbss.._ebss.
-     *   4) call main
-     *   5) si main volvió y REG_FW_STATUS no quedó en FW_STATUS_PASS: ebreak.
-     *      (¿qué pasa con la simulación si no lo hacen?)
-     */
-
-1:  j       1b                      /* borrar al completar */
+    la sp, _stack_top          # pila válida antes de entrar en C
+    la t0, _sidata             # origen ROM de los inicializadores
+    la t1, _sdata              # destino RAM
+    la t2, _edata              # final excluido
+copy_data:
+    bgeu t1, t2, clear_setup   # también acepta sección vacía
+    lw t3, 0(t0)              # lee cuatro bytes desde origen
+    sw t3, 0(t1)              # escribe cuatro bytes en destino
+    addi t0, t0, 4            # próxima palabra de ROM
+    addi t1, t1, 4            # próxima palabra de RAM
+    j copy_data
+clear_setup:
+    la t1, _sbss              # comienzo de datos a limpiar
+    la t2, _ebss              # final excluido
+clear_bss:
+    bgeu t1, t2, run_main
+    sw zero, 0(t1)            # registro zero siempre contiene cero
+    addi t1, t1, 4
+    j clear_bss
+run_main:
+    call main                 # guarda retorno en ra
+    li t0, REG_FW_STATUS_ADDR
+    lw t1, 0(t0)              # lee resultado dejado por main
+    li t2, FW_STATUS_PASS
+    beq t1, t2, finished
+    ebreak                    # retorno sin éxito: trap
+finished:
+    j finished                # no cae dentro de otro código
     .size   Reset_Handler, . - Reset_Handler
