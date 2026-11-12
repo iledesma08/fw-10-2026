@@ -84,14 +84,6 @@ A pesar de esta deficiencia, la simulación standalone de `test_fw_status` termi
 
 En conclusión, la observación de 0xFF sólo demuestra que `test_fw_status` completó su flujo programado y **no certifica que el entorno de C esté correctamente inicializado**. Esta deficiencia queda evidenciada en el **Hito 6**, donde el test `test_data_bss.c`, que sí exige variables inicializadas no nulas y comprueba sus valores antes de declarar éxito, falla de manera determinista bajo el startup original y solo pasa al incorporar la rutina completa desarrollada en este trabajo.
 
-## Hitos 2–5 — Implementación realizada
-
-- BL: cinco saltos de cuatro bytes, primer vector en 0x0 e IRQ defensiva en 0x10; .option norvc mantiene offsets. bl_reset_handler carga la pila y llama a C.
-- bl.ld conserva .vectors primero con KEEP. Captura .data/.sdata y .bss/.sbss/COMMON con KEEP y exige tamaño cero mediante ASSERT, incluso frente a eliminación de secciones. Las constantes pueden permanecer en ROM.
-- app.ld ubica seis campos de header primero en 0x1000, Reset_Handler en 0x1018, y las familias pequeñas de datos junto a .data/.bss. Publica límites de copia/limpieza y calcula tamaño según bytes cargables. Reserva 4096 bytes mínimos de pila como decisión de implementación; no mide su máximo consumo.
-- Startup: carga sp, copia palabras entre límites alineados, limpia ceros y llama a main. Ambos bucles aceptan rangos vacíos. Si main retorna sin 0xFF ejecuta ebreak; si ya declaró éxito queda en un bucle seguro.
-- bl_jump recibe stack en a0 y entry en a1, carga sp, limpia ra y salta mediante jr sin enlace al BL. La UART anuncia BL y entrada antes de ejecutar el FW.
-
 ## Hito 6 — Inicialización de .data y .bss
 
 ```sh

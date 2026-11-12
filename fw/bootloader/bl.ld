@@ -25,8 +25,8 @@ SECTIONS
     KEEP(*(.bss .bss.* .sbss .sbss.*))
     KEEP(*(COMMON))
   } > RAM
-  ASSERT(SIZEOF(.data) == 0, "BL necesita copia de datos")
-  ASSERT(SIZEOF(.bss) == 0, "BL necesita limpieza de datos")
+  ASSERT(SIZEOF(.data) == 0, "Error: el BL no admite variables globales inicializadas (.data no vacio)")
+  ASSERT(SIZEOF(.bss) == 0, "Error: el BL no admite variables globales sin inicializar (.bss no vacio)")
   /DISCARD/ : { *(.eh_frame .eh_frame_hdr) }
 }
 
@@ -37,4 +37,4 @@ __fw_slot_size  = LENGTH(APP_ROM);
 
 
 _bl_stack_top = ORIGIN(RAM) + LENGTH(RAM);
-ASSERT(_bl_vectors == ORIGIN(BL_ROM), "Tabla BL desplazada")
+ASSERT(_bl_vectors == ORIGIN(BL_ROM), "Error: Tabla BL desplazada")

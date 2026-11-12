@@ -25,7 +25,7 @@ _bl_vectors:
     j bl_unexpected     # offset 0x04: hueco defensivo
     j bl_unexpected     # offset 0x08: hueco defensivo
     j bl_unexpected     # offset 0x0C: hueco defensivo
-    j bl_unexpected     # offset 0x10: entrada IRQ
+    j bl_unexpected     # offset 0x10: entrada IRQ (PROGADDR_IRQ segun top.v)
     .size   _bl_vectors, . - _bl_vectors
     .option pop
 
