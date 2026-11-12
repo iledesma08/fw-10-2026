@@ -111,14 +111,6 @@ El flujo standalone falla porque `startup.S` **no copia las secciones de datos d
 
 > *Nota sobre `.bss`:* Que las variables sin inicializar lean cero en standalone no demuestra que hayan sido limpiadas, sino que coincide con el estado inicial en ceros de la memoria RAM en Verilator. La ausencia de copia en `.data`/`.sdata` es lo que demuestra de forma inequívoca la deficiencia del arranque original.
 
-## Hito 7 — Validación y fallos
-
-El BL comprueba magic, load_addr, tamaño, CRC, SP y entry, en ese orden. Primero exige 0x18 ≤ size ≤ capacidad del slot, antes de usarlo para recorrer memoria. Así la resta del intervalo CRC no queda negativa y la suma con la base fija no desborda.
-
-CRC-8 usa polinomio 0x07 e inicio 0xFF y cubre offsets [0x10,image_size), excluyendo su propio campo. Se compara el resultado con el campo completo de 32 bits. SP exige 0x20000 < sp ≤ 0x40000, múltiplo de 16; entry exige base+0x18 ≤ entry < base+size, múltiplo de cuatro. El stack inicialmente vacío puede estar en el extremo superior porque crece hacia abajo.
-
-En error, UART informa la causa, REG_FW_REPORT combina BL_REPORT_ERROR con el código, REG_FW_STATUS recibe 0xBAD y bl_halt ejecuta ebreak. El caso CORRUPT=1 informó CRC inválido y terminó por trap, sin ejecutar el FW, en 482283 ciclos.
-
 ## Hito 8 — Cinco comprobaciones
 
 Las direcciones de datos siguientes corresponden a APP_SRC="print.c test_data_bss.c"; no se mezclan con la imagen final de test_fw_status.
