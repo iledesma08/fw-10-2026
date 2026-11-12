@@ -86,19 +86,30 @@ En conclusión, la observación de 0xFF sólo demuestra que `test_fw_status` com
 
 ## Hito 6 — Inicialización de .data y .bss
 
+Para verificar si el entorno de C se inicializa correctamente, se utiliza el test `test_data_bss.c`. A diferencia del test inicial, este define variables globales con valores iniciales (`tp4_data_word = 0x1234ABCD` en `.sdata` y `tp4_data_array` en `.data`) y variables en cero (`.sbss`/`.bss`), declaradas como `volatile`, que le indica al compilador que conserve cada lectura y escritura efectiva en memoria, evitando que el optimizador suprima los accesos.
+
+El programa comprueba cada valor y solo escribe `0xFF` (`PASS`) si todos coinciden, ante cualquier discrepancia imprime `FAIL`, escribe `0xBAD` y ejecuta `ebreak` (`TRAP!`).
+
+Para comparar el comportamiento, se simula el mismo test bajo dos caminos de arranque:
+
+1. **Combinado:** Bootloader + `app_startup.S`, que implementa los bucles de copia de `.data`/`.sdata` a RAM y puesta a cero de `.bss`/`.sbss`.
+2. **Standalone (`STANDALONE=1`):** arranque original `startup.S`, que solo carga `sp` y salta a `main` sin inicializar la memoria.
+
 ```sh
 make -C fw sim APP_SRC="print.c test_data_bss.c" VER_FLAGS="--binary -Wno-fatal -f filelist.f"
 make -C fw sim STANDALONE=1 APP_SRC="print.c test_data_bss.c" VER_FLAGS="--binary -Wno-fatal -f filelist.f"
 ```
 
-| Variante | Valor observado tp4_data_word | Resultado | Ciclos |
+| Variante | Valor observado `tp4_data_word` | Resultado observado | Ciclos |
 |---|---|---|---|
-| Combinada | 0x1234ABCD | PASS, estado 0xFF | 776217 |
-| Standalone | 0x00000000 | FAIL en palabra y array inicializados, trap | 16028 |
+| **Combinada** | `0x1234ABCD` | `PASS`, estado `0xFF` | 776217 |
+| **Standalone** | `0x00000000` | `FAIL` (en `.sdata` y `.data`), `TRAP!` | 16028 |
 
-El array inicializado debe contener {1,2,3,4}; el test recorre esos elementos y los objetos sin inicializador, y solo escribe PASS si todas las comparaciones coinciden. En la combinada se observó PASS. En standalone se observaron ambos mensajes de inicializadores ausentes. La diferencia es consistente con la copia de .data/.sdata del startup nuevo, ausente en el original.
+#### ¿Por qué falla el arranque original?
 
-Observar ceros en .bss no prueba por sí solo que el startup haya limpiado: la RAM del modelo ya puede estar en cero. La inspección del bucle y los límites respalda qué hace el código, sin generalizar el estado inicial del simulador a RAM física.
+El flujo standalone falla porque `startup.S` **no copia las secciones de datos desde ROM a RAM**. Como consecuencia, las variables globales leen el contenido residual de la RAM (`0x00000000` en el simulador) en lugar de sus valores iniciales, provocando que el test detecte el error, escriba `0xBAD` y detenga la simulación mediante `ebreak`.
+
+> *Nota sobre `.bss`:* Que las variables sin inicializar lean cero en standalone no demuestra que hayan sido limpiadas, sino que coincide con el estado inicial en ceros de la memoria RAM en Verilator. La ausencia de copia en `.data`/`.sdata` es lo que demuestra de forma inequívoca la deficiencia del arranque original.
 
 ## Hito 7 — Validación y fallos
 
