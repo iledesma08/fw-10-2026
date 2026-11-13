@@ -6,7 +6,6 @@ volatile int int_0 ;
 volatile int int_1 ;
 volatile int int_2 ;
 
-
 void main(){
     REG_FW_STATUS = 0x0 ;
     REG_FW_REPORT = 0x0 ;
