@@ -262,50 +262,162 @@ Este tipo de tests nos permiten confirmar que **el transporte y la carga de la i
 
 ### 1. PicoRV32 frente a Cortex-M
 
-PicoRV32 comienza a ejecutar instrucciones desde PROGADDR_RESET; por eso necesita un salto en 0x0. En Cortex-M del ejemplo de clase, el hardware lee la primera palabra como SP inicial y la segunda como dirección de reset. Son direcciones, no instrucciones de salto. El header del FW almacena datos de ese estilo, pero aquí los interpreta el BL por software. No se atribuye mtvec al mecanismo específico de este PicoRV32.
+- **PicoRV32:** Al salir de reset, el hardware inicializa directamente el PC con el parámetro `PROGADDR_RESET` (`0x0`) y comienza a ejecutar. Por eso, en `0x0` debe haber una **instrucción de salto** (`j bl_reset_handler`) y no un dato, ya que la CPU decodifica esa primera posición como código ejecutable.
 
-### 2. Pasos del Makefile
+- **Cortex-M:** El hardware no ejecuta código en `0x0`, sino que lee automáticamente la tabla de vectores: toma la primera palabra como el valor inicial del SP y la segunda como la dirección del Reset Handler. Son **punteros/datos** interpretados.
 
-GCC compila y enlaza bl.elf y app.elf según scripts diferentes; objcopy extrae binarios; mkimage comprueba el formato, completa CRC, agrega relleno y combina; hexdump representa palabras; install copia a fw/fw.hex; sim ejecuta Verilator y el testbench carga ese archivo.
+De esta forma, el firmware adopta un esquema de datos similar al de Cortex-M: al inicio de su imagen en memoria (sección `.fw_header` en `0x1000`) no coloca instrucciones ejecutables, sino una cabecera con metadatos que incluye el puntero de pila inicial (`initial_sp`) y la dirección de su código de arranque (`reset_handler`). La diferencia fundamental es que la PicoRV32 desconoce por completo esta estructura a nivel hardware. Es el Bootloader quien, tras validar la integridad de la imagen, mapea dicha cabecera como una estructura en C, extrae ambos valores y ejecuta una rutina en ensamblador que adopta el nuevo stack (`mv sp, a0`) y transfiere el control hacia el Reset Handler mediante un salto (`jr a1`).
 
-**¿Por qué ELF separados?** BL y FW tienen regiones, entradas y responsabilidades diferentes. Se pueden inspeccionar sin resolver accidentalmente sus funciones entre sí. El contrato de transferencia es el header más la ABI del salto.
+### 2. Sobre el Makefile
 
-**¿Qué dirección usa objcopy -O binary para .data?** La LMA; por eso los bytes iniciales quedan dentro de la imagen ROM y no se crea un enorme hueco hasta su VMA de RAM. No conserva tablas de símbolos ni depuración como datos del programa.
+El Makefile orquesta el proceso para transformar el código fuente en una imagen final ejecutable por el simulador:
 
-**¿Qué agrega mkimage entre BL y FW?** Bytes cero hasta load_addr=0x1000. Si se ejecutan, esas palabras son instrucciones ilegales en esta configuración. También puede agregar relleno final hasta múltiplo de cuatro y completar el CRC dentro del header.
+1. Invoca a GCC dos veces con linker scripts distintos (`bl.ld` y `app.ld`) para producir `bl.elf` (Bootloader) y `app.elf` (Firmware).
+2. Con `objcopy -O binary` descarta metadatos, símbolos y secciones de depuración, extrayendo únicamente los bytes útiles de código y datos en `bl.bin` y `app.bin`.
+3. **Con `mkimage.py` hace el empaquetado:** Fusiona ambos binarios en un único archivo `fw.bin`. Rellena el espacio intermedio con ceros para alinear el firmware en `0x1000`, calcula el CRC-8 de la aplicación y lo escribe en el header.
+4. **Formateo para el testbench:** Mediante `hexdump`, traduce `fw.bin` al archivo de texto `fw.hex`, que es el formato que lee el testbench de Verilog con `init_memory()`.
+5. **Ejecución y verificación:** `make sim` corre Verilator capturando el log, y `make check` audita que lo cargado en memoria coincida exactamente con el binario generado.
+
+#### ¿Por qué compilar `bl.elf` y `app.elf` por separado?
+
+Porque representan dos entidades de software totalmente independientes con roles, ciclos de vida y layouts de memoria distintos:
+
+- El Bootloader reside en `BL_ROM` (`0x0000`) y tiene prohibido el uso de variables globales en RAM.
+- El Firmware reside en `APP_ROM` (`0x1000`) y gestiona sus propias secciones `.data` y `.bss` en RAM (`0x20000`).
+
+Enlazarlos por separado garantiza el aislamiento: evita que el linker resuelva símbolos cruzados accidentalmente (como que el BL llame funciones privadas del FW o comparta código sin querer). El único canal de comunicación entre ambos es el contrato formal definido por la cabecera (`fw_header_t`) y los registros al momento del salto (`a0` y `a1`). Además, en un entorno real, esto permite actualizar el firmware sin necesidad de recompilar ni tocar el bootloader pregrabado.
+
+#### ¿Qué dirección usa `objcopy -O binary` para `.data`?
+
+Utiliza la **LMA** (Load Memory Address, dirección de carga en ROM) y no la **VMA** (Virtual Memory Address, dirección de enlace en RAM).
+
+En sistemas embebidos, los valores iniciales de las variables globales deben almacenarse en memoria no volátil (ROM). Si `objcopy` utilizara la VMA (`0x00020000`), interpretaría que debe generar un archivo con un hueco gigantesco de ceros entre el fin del código en ROM (`0x145B`) y la RAM (`0x20000`), creando un binario innecesariamente enorme. Al usar la LMA, `objcopy` empaqueta los datos iniciales pegados inmediatamente después del código dentro de la imagen ROM. Luego, es tarea del `Reset_Handler` copiar esos bytes desde la ROM a su ubicación final en RAM antes de entrar a `main`.
+
+#### ¿Qué agrega `mkimage.py` entre el BL y el FW?
+
+Agrega un relleno de ceros **(padding)** desde el final del binario del Bootloader (alrededor de `0x03F8`) hasta el inicio del slot del Firmware en `0x1000`.
+
+Este relleno cumple dos propósitos fundamentales:
+
+1. **Alineación espacial:** Asegura que el header y el código del firmware queden posicionados exactamente en la dirección `0x1000`, que es donde el Bootloader está programado para buscarlos.
+2. **Protección defensiva:** En la arquitectura RISC-V, una palabra compuesta por 32 ceros (`0x00000000`) corresponde a una instrucción ilegal. Si por una falla o bug el Bootloader no ejecutara el salto y se desbordara secuencialmente más allá de su código, la CPU intentaría decodificar estos ceros y entraría en excepción inmediata (`trap`), previniendo un comportamiento incorrecto.
 
 ### 3. Diferencia en la palabra 0x100C
 
-app.elf contiene el marcador FW_IMAGE_CRC_UNSET=0xFFFFFFFF. El empaquetador escribe el CRC calculado en el binario combinado después del enlace, y no modifica el ELF. En la imagen final sana se observó 0x000000F7; en la variante test_data_bss, 0x00000097. La discrepancia con el marcador del ELF es intencional. El campo es de 32 bits aunque el CRC tenga ocho; sus bits altos deben quedar en cero.
+La dirección `0x100C` corresponde al campo `image_crc` dentro de la cabecera del Firmware (`0x1000` + offset `0x0C`), y la discrepancia observada entre ambos archivos es intencional por la etapa en la que interviene cada herramienta:
+
+1. **En `app.elf` (fase de compilación y enlace):** El compilador y el linker procesan el código fuente pero aún no conocen el contenido binario final ni el tamaño exacto empaquetado. Por eso, en `app_startup.S` se inicializa este campo con el marcador provisional `FW_IMAGE_CRC_UNSET = 0xFFFFFFFF`. Este valor sirve como un placeholder que indica que la imagen todavía no fue firmada (ningún CRC-8 válido produciría ese número).
+
+2. **En `fw.hex` (fase de post-procesamiento y empaquetado):** El cálculo del CRC ocurre fuera del compilador, ya que el script `tools/mkimage.py` toma el binario crudo `app.bin`, calcula el CRC-8 cubriendo desde la tabla de vectores (`0x10`) hasta el final de la imagen (`image_size`), y sobrescribe directamente esa palabra con el resultado:
+   - En la imagen final de producción (`test_fw_status`): se grabó `0x000000F7`.
+   - En la variante de prueba (`test_data_bss`): se grabó `0x00000097`.
+
+De esta forma, `mkimage.py` modifica únicamente los bytes del binario combinado (`fw.bin`) y no altera el archivo `app.elf`, razón por la cual este último conserva intacto el `0xFFFFFFFF`.
 
 ### 4. Comparar el FW anterior y el relinkeado
 
-Se compararon instrucciones de los programas generados desde las mismas fuentes locales, sin traer soluciones de otra rama. El standalone empieza con su propio startup en cero; la imagen nueva añade el header y el startup completo en 0x1018. No se pueden comparar las líneas del FW como si solo se hubiera agregado un desplazamiento fijo: hay código añadido y secciones reorganizadas.
+Al comparar el desensamblado del firmware original (`standalone.elf` en `0x0`) con el del firmware relinkeado (`app.elf` en `0x1000`), se observa qué instrucciones son independientes de la posición en memoria y cuáles se ven afectadas por el cambio de dirección:
 
-Comparación concreta medida: print_str empieza en 0xB4 en standalone y en 0x1130 en el FW nuevo. Su instrucción lbu a5,0(a0) mantiene la palabra 00054783; su salto final mantiene F35FF06F aunque cambia el destino absoluto de 0x10 a 0x108C. En main, la dirección de la cadena inicial cambia: standalone usa li a0,928 (0x3A0); el FW usa lui a0,0x1 y addi a0,a0,1064 para formar 0x1428. El salto de dirección absoluta de la cadena necesita instrucciones distintas y cambia el tamaño/orden local.
+#### Instrucciones que NO cambian
 
-En una función de C equivalente, operaciones sobre registros como lbu a5,0(a0) conservan codificación si no cambian sus operandos. Saltos relativos pueden conservar su desplazamiento si origen y destino se mueven juntos; referencias absolutas deben ajustarse a nuevas direcciones. La relajación del linker también puede cambiar instrucciones. El ELF y el HEX no son intercambiables: el HEX nuevo ya incluye el CRC post-enlace.
+- **Operaciones lógicas y aritméticas sobre registros:** Las instrucciones que operan internamente en la CPU (como `lbu a5, 0(a0)`, `add`, `addi sp, sp, -32`) conservan exactamente la misma codificación hexadecimal. No dependen de la dirección absoluta en la que estén alojadas.
+- **Saltos relativos (branch y jump):** En RISC-V, los saltos incondicionales (`j / jal`) y condicionales (`beq`, `bnez`) codifican un desplazamiento relativo al Program Counter. Si tanto el origen del salto como su etiqueta de destino pertenecen a la misma función y se trasladaron en bloque hacia `0x1000`, la distancia en bytes entre ambos permanece inalterada.
+
+#### 2. Instrucciones que SÍ cambian
+
+**Carga de direcciones absolutas y cadenas:** Cambian todas las instrucciones que necesitan apuntar a objetos con ubicación fija en memoria, como cadenas de texto en `.rodata` o punteros globales.
+
+*Ejemplo en `main`:* Para cargar la dirección del mensaje inicial `"-- running test_fw_status --"`:
+
+- En standalone, la cadena residía en la dirección baja `0x03A0`. Como ese valor cabe en 12 bits con signo, el compilador lo resolvió con una sola instrucción: `li a0, 928` (`3a000513`).
+
+- Al relinkear el firmware a partir de `0x1000`, la misma cadena quedó desplazada a `0x1428`. Al superar el límite de 12 bits, el compilador debió sintetizar la dirección utilizando **dos instrucciones**: `lui a0, 0x1` seguida de `addi a0, a0, 1064`.
+
+#### Conclusión
+
+Relinkear el firmware a `0x1000` no produce una simple traslación aritmética de bytes en el archivo `.hex`. Además de que el nuevo firmware incluye 24 bytes de encabezado (`.fw_header`) y una rutina de arranque más extensa (`Reset_Handler` con bucles de inicialización), el desplazamiento de direcciones absolutas obliga al compilador a generar secuencias de instrucciones distintas (`lui` + `addi`), alterando el tamaño y la distribución del código máquina resultante.
 
 ### 5. jr frente a jalr ra y recarga de stack
 
-bl_jump es un traspaso sin retorno. jr a1 equivale a jalr x0,0(a1), no guarda una dirección de vuelta al BL. Cambiar sp abandona la pila del BL: no se debe intentar volver al epílogo C anterior. ra se limpia para no conservar un retorno residual, pero el startup sigue siendo responsable de manejar la vuelta de main.
+#### ¿Por qué el salto se realiza con `jr` y no con `jalr ra`?
 
-El FW recarga sp para establecer por sí mismo el entorno de entrada, incluso si BL dejó el mismo valor. Esto no inicializa .data ni .bss: esas tareas tienen bucles separados.
+La diferencia fundamental está en si queremos que el procesador guarde o no una dirección de retorno:
+
+- **Si usáramos `jalr ra, 0(a1)`:** Esta instrucción guarda automáticamente en el registro `ra` la dirección siguiente del Bootloader. Eso convertiría al Firmware en una "subrutina" que espera volver. Pero el Firmware es la aplicación final del sistema, no una función subordinada: no tiene que retornar jamás al Bootloader. Si dejáramos esa dirección en `ra` y por cualquier error el Firmware ejecutara una instrucción de retorno, la CPU volvería a caer dentro del código del Bootloader, pero con la pila ya cambiada y el contexto destruido, provocando una corrupción de memoria o un cuelgue impredecible.
+
+- **Por qué usamos `jr a1`:** En RISC-V, `jr a1` es equivalente `jalr x0, 0(a1)`. Al indicar como destino el registro `x0` (cableado permanentemente a cero), el hardware descarta físicamente la dirección de retorno. Comunica de forma explícita que es un salto definitivo y sin regreso. Además, justo antes del salto ejecutamos `li ra, 0` para limpiar cualquier retorno viejo que haya quedado en `ra`: si el Firmware alguna vez intentara volver, saltará a la dirección `0x0`, provocando un reinicio limpio o un fallo controlado en vez de ejecutar basura.
+
+#### ¿Por qué el FW vuelve a cargar `sp` si el BL ya lo configuró?
+
+En `app_startup.S`, la primera instrucción de `Reset_Handler` es `la sp, _stack_top`, repitiendo el valor que el Bootloader acaba de colocar en `sp`. Esto responde a principios fundamentales de diseño de software embebido:
+
+1. **Principio de autonomía y robustez:** El Firmware no debe asumir que el entorno previo le dejó un estado de registros perfecto. Para cumplir con el contrato de ejecución de C, el propio código de arranque de la aplicación tiene la responsabilidad ineludible de garantizar que el puntero de pila sea válido antes de llamar a `main`.
+2. **Desacoplamiento del loader:** Esta redundancia permite que el Firmware sea portable e independiente del mecanismo de carga. Si en otro escenario el Firmware se grabara directo en hardware o se ejecutara sin Bootloader, funcionará de manera transparente sin depender de inicializaciones externas.
+3. **Costo despreciable:** Al costar solo una instrucción que se ejecuta una única vez durante el ciclo de vida del procesador, aporta seguridad y robustez arquitectural sin impacto en memoria ni rendimiento.
 
 ### 6. Éxito y error
 
-El BL no escribe 0xFF porque el testbench lo interpreta como finalización exitosa y podría terminar antes de ejecutar el FW. La aplicación declara su éxito. 0xBAD solo comunica fallo: la condición del testbench es 0xFF o trap. Por eso se necesita ebreak/bl_halt, y fue necesario conectar correctamente trap en el testbench mediante la excepción autorizada.
+#### ¿Por qué el Bootloader no puede escribir `0xFF`?
+
+Porque en el testbench, el valor `0xFF` en `REGISTER_FW_STATUS` representa la finalización exitosa de toda la prueba.
+
+El Bootloader es un cargador previo: su rol termina cuando valida la imagen y cede el control. Si el Bootloader escribiera `0xFF` al comprobar que el header o el CRC son válidos, el testbench interpretaría que el test general concluyó, cortaría la simulación inmediatamente y el Firmware jamás llegaría a ejecutarse. Por este motivo, el Bootloader mantiene el registro en `0` (o estados intermedios) y le delega exclusivamente a la aplicación final la responsabilidad de declarar el éxito tras completar sus chequeos.
+
+#### ¿Por qué ante un error no alcanza con escribir `0xBAD`?
+
+El registro con el valor `0xBAD` sirve como diagnóstico para inspeccionar en las ondas (*waveforms*) o en consola qué ocurrió, pero no detiene la simulación.
+
+Al evaluar el bucle `REGISTER_FW_STATUS != 32'hFF`, cualquier valor distinto de `0xFF` (incluido `0xBAD`) hace que el testbench continúe ejecutándose. Si el software se limitara a escribir `0xBAD` y quedarse en un bucle infinito, la simulación ciclaría indefinidamente sin terminar nunca.
+
+Para forzar la detención inmediata por falla, el software debe satisfacer la segunda condición de salida: `trap == 1`. Por eso, la rutina `bl_fail()` realiza una parada:
+
+1. Escribe `REG_FW_STATUS = 0xBAD` y un código descriptivo en `REG_FW_REPORT` para diagnóstico.
+2. Invoca a `bl_halt()`, que ejecuta la instrucción ensamblador `ebreak`.
+3. El procesador entra en excepción y activa su línea física de hardware `trap`, señal que el testbench detecta para salir del bucle, imprimir el mensaje de error y cerrar la simulación.
 
 ### 7. Funciones de strutils y ausencia de libc
 
-La versión local de strutils.c solo define str_crc8. nm del BL confirma que queda str_crc8: bl_main la llama. -ffunction-sections separa funciones y --gc-sections conserva las alcanzables y elimina las no usadas; compilar un archivo no obliga a incluir todo su contenido. Si se usara una biblioteca más extensa, el resultado dependería de sus referencias y optimización. El BL no enlaza libc; su CRC no llama a malloc, printf ni otras funciones de esa biblioteca. -lgcc aporta auxiliares del compilador, no libc.
+#### ¿Qué funciones de `strutils` quedan en `bl.elf`?
+
+Al ver los símbolos del ejecutable final com `riscv64-unknown-elf-nm -n fw/build/bl.elf`, se observa que la **única** función que permanece en el binario es **`str_crc8`**.
+
+Ninguna otra función de la biblioteca (como `strbuf_append` o `str_trim`) forma parte del ejecutable final del Bootloader.
+
+#### ¿Por qué el linker solo incluye `str_crc8`?
+
+Esto es el resultado directo de la combinación de dos banderas de optimización en la cadena de compilación:
+
+1. **`-ffunction-sections` (en GCC):** Por defecto, el compilador coloca todas las funciones de un archivo fuente en un único bloque `.text`. Al activar este flag, cada función se empaqueta en su propia sección individual (por ejemplo, `str_crc8` en `.text.str_crc8`).
+2. **`-Wl,--gc-sections` (en el Linker `ld`):** Activa la eliminación de código muerto (*Garbage Collection* de secciones). El linker construye el árbol de llamadas comenzando desde el punto de entrada (`_bl_vectors` / `bl_main`). Cualquier sección a la que nadie llame se descarta físicamente del binario final.
+
+Dado que `bl_main()` solo necesita validar la integridad de la imagen mediante `str_crc8()`, el linker descarta cualquier otra rutina no referenciada, logrando que el binario del Bootloader sea ultracompacto (apenas 1016 bytes).
 
 ### 8. Compresión de instrucciones
 
-rv32ic permite instrucciones de dos bytes, y un ensamblador puede comprimir saltos. Si la tabla supone cinco instrucciones consecutivas de cuatro bytes y no usa .option norvc, el salto de IRQ podría no quedar en 0x10. La tabla del BL fuerza instrucciones de cuatro bytes y el flujo actual lo compila rv32i; no se modificó COMPRESSED_ISA del RTL para este TP.
+En la configuración del procesador (`rtl/top.v`), las direcciones fijas de entrada por hardware son inmutables:
 
-## Cierre de entrega y límites
+- Reset físico: `PROGADDR_RESET = 0x00000000`.
+- Interrupción física (IRQ): `PROGADDR_IRQ = 0x00000010` (offset de 16 bytes).
 
-Logs reales exigidos: [simulación sana](entrega-sano.log) y [simulación corrupta](entrega-corrupto.log). La imagen final queda sana, con el test_fw_status por defecto; se regeneró y se repitieron sim y check después de CORRUPT=1. Resultado final: 0xFF y RESULTADO: OK, 497229 ciclos. Los artefactos de fw/build corresponden a ese último flujo sano; los números del hito 8 con test_data_bss están anotados arriba como una variante diferente.
+Para cumplir con este requisito, la tabla de vectores en `bl_start.S` se diseñó disponiendo 5 saltos consecutivos:
 
-Los tests no certifican autenticidad ni ausencia de todos los errores; el CRC protege integridad accidental. No se realizó el extra opcional de rendimiento ni se modificaron parámetros de CPU. La reserva de pila de 4096 bytes es estática y no constituye análisis de peor caso.
+- Dirección `0x00`: `j bl_reset_handler`
+- Dirección `0x04`: `j bl_unexpected`
+- Dirección `0x08`: `j bl_unexpected`
+- Dirección `0x0C`: `j bl_unexpected`
+- Dirección `0x10`: `j bl_unexpected` (entrada de IRQ)
+
+Esta estructura geométrica supone de forma que cada instrucción `j` ocupa exactamente 4 bytes ($4 \text{ instrucciones} \times 4\text{ bytes} = 16\text{ bytes} = \text{offset } 0x10$).
+
+#### ¿Qué pasaría si se compila con `rv32ic` sin `.option norvc`?
+
+La extensión `C` (Compressed) de RISC-V incorpora instrucciones de longitud variable de 16 bits (2 bytes). La instrucción de salto incondicional a distancias cortas `j` dispone de su variante comprimida `c.j`.
+
+Si se compilara el Bootloader bajo la arquitectura `rv32ic` sin la protección de `.option norvc`:
+
+1. El ensamblador optimizaría automáticamente cada salto reduciéndolo a 2 bytes. Como resultado, las cuatro instrucciones iniciales ocuparían solo $4 \times 2 = 8\text{ bytes}$, provocando que el salto asignado a la IRQ quede ubicado en la dirección `0x00000008` en lugar de `0x00000010`.
+2. En la dirección fija `0x00000010` ya no existiría el vector de interrupción, sino código arbitrario perteneciente a `bl_reset_handler` o a otra función subsiguiente. Ante la llegada de una interrupción, el hardware forzaría el Program Counter ($PC$) ciegamente a `0x10`, ejecutando instrucciones descontextualizadas a mitad de una rutina ajena, desalineando el flujo de la CPU y colgando irremediablemente el microcontrolador.
+
+#### Solución implementada
+
+La directiva `.option norvc` en `bl_start.S` (encapsulada entre `.option push` y `.option pop`) le ordena de manera explícita al ensamblador que dentro de ese bloque **suspenda la compresión y fuerce todas las instrucciones al ancho estándar de 32 bits (4 bytes)**. De esta forma, se blinda el espaciado geométrico de la tabla garantizando que el vector de IRQ caiga siempre en `0x10`, independientemente de los flags de optimización o de arquitectura que se utilicen al compilar.
