@@ -111,24 +111,152 @@ El flujo standalone falla porque `startup.S` **no copia las secciones de datos d
 
 > *Nota sobre `.bss`:* Que las variables sin inicializar lean cero en standalone no demuestra que hayan sido limpiadas, sino que coincide con el estado inicial en ceros de la memoria RAM en Verilator. La ausencia de copia en `.data`/`.sdata` es lo que demuestra de forma inequívoca la deficiencia del arranque original.
 
-## Hito 8 — Cinco comprobaciones
+## Hito 8
 
-Las direcciones de datos siguientes corresponden a APP_SRC="print.c test_data_bss.c"; no se mezclan con la imagen final de test_fw_status.
+Al principio me costó entender qué era exactamente lo que se me pedía en este hito. De hecho, fue el punto donde más me trabé: no terminaba de ver para qué servía calcular números de línea ni qué estaba haciendo en realidad. Por eso puede que sea muy largo porque, principalmente, me sirve a mi hacerlo asi.
 
-1. **HEX y mapas:** BL en línea 1; magic del header en línea 1025. Dirección=4×(N−1). Campo CRC en 0x100C/línea 1028; puntero de reset en 0x1014/línea 1030. El log usa índice de palabra hexadecimal: 0x400 es dirección 0x1000, no dirección 0x400.
-2. **Inspección:** objdump -d del BL muestra j a bl_reset_handler en cero y j a bl_unexpected en 0x10. objdump -s -j .fw_header del app muestra los seis campos. El ELF todavía contiene FFFFFFFF en image_crc; el HEX contiene el CRC calculado.
-3. **Entrada:** símbolo Reset_Handler=0x1018, Entry point=0x1018 y palabra en 0x1014=0x1018. El reset físico del core sigue siendo cero; el BL lee ese campo y salta.
-4. **Datos:** .data tiene VMA 0x20000, LMA 0x16CC y tamaño 0x14. _sdata=0x20000, _edata=0x20014 y _sidata=0x16CC. .bss ocupa [0x20014,0x20058), tamaño 0x44. La imagen llega hasta 0x16E0 y __fw_size=0x6E0. El test compara valores y declara PASS.
-5. **Carga:** después de simular esa misma imagen, make -C fw check informó RESULTADO: OK. Se compararon palabras del HEX con loading del log. Eso verifica la carga y los predicados del script, no sustituye el test de ejecución.
+Al profundizar en la consigna y en el código entendí que en sistemas embebidos existe una distancia enorme entre **lo que el linker cree que generó** y **lo que físicamente termina cargado en la memoria de la CPU**. Que una compilación o un script empaquetador terminen sin errores no garantiza que los bytes hayan quedado donde el procesador los espera.
 
-Comandos de inspección:
+El Hito 8 existe para contrastar fuentes independientes sin confiar ciegamente en ninguna:
 
-```sh
-make -C fw inspect APP_SRC="print.c test_data_bss.c"
-riscv64-unknown-elf-readelf -S -l -W fw/build/app.elf
-riscv64-unknown-elf-nm -n fw/build/app.elf
-make -C fw check
+1. **El archivo ELF y los mapas (`bl.map`, `app.map`):** Indican dónde planificó el linker ubicar cada sección, función y variable.
+
+2. **El archivo empaquetado (`fw.hex`):** Es la imagen plana final armada por `mkimage.py`. Cada línea contiene 8 caracteres hexadecimales, lo que equivale a $8 \times 4\text{ bits} = 32\text{ bits} = 4\text{ bytes}$ (exactamente una palabra de RISC-V). El testbench va a leer cada linea desde el principio con init_memory()
+
+3. **El log del simulador (`sim.log`):** Registra palabra por palabra cómo la función `init_memory()` del testbench fue escribiendo la memoria simulada desde la dirección cero.
+
+4. **La ejecución real:** Lo que la CPU hace cuando empieza a ejecutar instrucciones desde el reset.
+
+Osea, el corazón de este hito es auditar de punta a punta el contrato entre el Bootloader y el Firmware. Por ejemplo: verificar que si el linker ubicó `Reset_Handler` en `0x1018`, ese valor figure efectivamente en el campo `reset_handler` del header en `0x1014`, que el testbench cargue esa palabra en `0x1014`, y que el Bootloader lea esa posición para saltar al código de la aplicación.
+
+Después de entender globalmente el hito, ya pude hacer cada paso mejor:
+
+### Paso 1: Ubicación en memoria y relación entre Líneas, Índices y Direcciones
+
+El primer paso consistió en localizar el Bootloader y el header del Firmware dentro de la imagen integrada `fw.hex`.
+
+El testbench carga la memoria secuencialmente palabra por palabra desde la dirección `0x0`. Por lo tanto:
+
+- **Línea 1 del HEX:** Corresponde a la palabra en el índice `0`, es decir, la dirección `0x0000`, donde arranca el salto inicial del Bootloader (coincidiendo con `memory_map.ld` para `BL_ROM`).
+
+- **Línea 1025 del HEX:** Corresponde al inicio del Firmware (`APP_ROM`). Antes de esta línea hay $1025 - 1 = 1024$ palabras. Al multiplicar 1024 palabras por 4 bytes cada una, obtenemos 4096 bytes, que en hexadecimal es exactamente `0x1000` (base definida en `memory_map.ld`).
+
+#### La relación entre el log (`sim.log`) y el archivo (`fw.hex`)
+
+Al inspeccionar `sim.log`, el testbench imprime trazas con el siguiente formato:
+
+```text
+loading: 00000400 -> 46345054
 ```
+
+Acá el valor `00000400` no es una dirección en bytes, sino el **índice de palabra en hexadecimal**:
+
+- $0x400_{\text{hex}} = 1024_{\text{dec}}$ palabras cargadas previamente.
+- Para pasarlo a dirección física en bytes: $0x400 \times 4\text{ bytes} = \mathbf{0x1000}$.
+- Coincide exactamente con la línea $1024 + 1 = \mathbf{1025}$ del archivo `fw.hex`.
+
+#### De Dirección a Línea: El puntero de reset
+
+Para hacer el camino inverso tomamos, por ejemplo, el campo del puntero de reset en la dirección $A = 0x1014$ (definido en `fw_image.h` como offset `0x14` dentro del header):
+
+- Convertimos a bytes en decimal: $0x1014 = 4116\text{ bytes}$.
+- Índice de palabra: $i = \frac{A}{4} = \frac{4116}{4} = 1029 = \mathbf{0x405_{\text{hex}}}$.
+- Número de línea en el archivo de texto: $N = i + 1 = 1029 + 1 = \mathbf{1030}$.
+
+Al mirar la línea 1030 del archivo `fw.hex` y el log en el índice `0x405`, vemos exactamente el mismo valor:
+
+```text
+loading: 00000405 -> 00001018
+```
+
+Aparece el mismo número (`00001018`) porque **la línea 1030 del `.hex` es el dato que el testbench lee e imprime en el log**. Y ese valor `0x1018` es el contenido del campo: la dirección de memoria donde empieza `Reset_Handler`.
+
+> Esto significa que en `0x1014` hay un **puntero** cuyo valor es `0x1018`. En `0x1018` residen las instrucciones de código. El Bootloader lee el contenido de `0x1014` y salta a `0x1018`. **Si confundiéramos dirección con contenido, el procesador intentaría ejecutar el propio header como si fuera código.**
+
+En `app/app_startup.S` se declara primero la seccion `.fw_header` que mide 24 bytes, osea va de `0x1000` a `0x1017`, y lo proximo que se define es `Reset_Handler`, por eso queda en `0x1018`.
+
+El salto se produce porque `.word Reset_Handler` le indica al linker que en esa parte del header ponga la direccion del simbolo `Reset_Handler`, y como cada palabra ocupa 4 bytes y esta es la sexta palabra desde el inicio de la ROM para la app, esta en `0x1014`. Por eso el linker escribe 0x1018 en 0x1014, luego el Bootloader lee esta direccion y le ordena a la CPU saltar ahi.
+
+#### ¿Que hay de `0x1000` a `0x1003`?
+
+En la línea 1025 de `fw.hex` esta la palabra `46345054`:
+
+- En la tabla ASCII: `'T'` = `0x54`, `'P'` = `0x50`, `'4'` = `0x34`, `'F'` = `0x46`.
+- En una arquitectura Little-Endian como RISC-V, el byte menos significativo se almacena en la dirección de memoria más baja:
+  - Dirección `0x1000`: `0x54` (`'T'`)
+  - Dirección `0x1001`: `0x50` (`'P'`)
+  - Dirección `0x1002`: `0x34` (`'4'`)
+  - Dirección `0x1003`: `0x46` (`'F'`)
+- Cuando la CPU lee esos 4 bytes juntos como una palabra entera de 32 bits, el valor numérico es `0x46345054`.
+
+### Paso 2: Mirar instrucciones y datos con herramientas distintas
+
+- Para ver código ejecutable se usa **desensamblado** (`objdump -d`).
+- Para ver tablas, headers y constantes se usa `objdump -s`.
+
+```bash
+$ riscv64-unknown-elf-objdump -d fw/build/bl.elf
+$ riscv64-unknown-elf-objdump -s .fw_header fw/build/app.elf
+```
+
+Al desensamblar `bl.elf` con `-d`, vemos las instrucciones reales de la tabla de vectores definida en `bl_start.S`:
+
+```console
+00000000 <_bl_vectors>:
+   0:   0140006f                j       14 <bl_reset_handler>
+   4:   0100006f                j       14 <bl_unexpected>
+   ...
+```
+
+Se observa el salto inicial en `0x0000` hacia `0x14`. Esto ocurre porque la tabla de vectores reserva 5 palabras de 4 bytes (`0x00`, `0x04`, `0x08`, `0x0C` y `0x10`) para interrupciones, juystamente como `bl_reset_handler`, por lo que la lógica real del Bootloader comienza inmediatamente después, en el offset `0x14`.
+
+Sobre `app.elf` usamos `-s .fw_header` para ver los bytes en crudo, que podemos ver cosas como el TP4F que dije antes.
+
+### Paso 3: Comprobar el puntero de reset desde fuentes distintas
+
+Para comprobar que el firmware no vaya a saltar a cualquier lado al arrancar, contrastamos fuentes independientes:
+
+```bash
+$ riscv64-unknown-elf-readelf -h fw/build/app.elf   # Entry point del ELF -> 0x1018
+$ riscv64-unknown-elf-nm -n fw/build/app.elf        # Dirección del símbolo Reset_Handler -> 0x1018
+$ sed -n '1030p' fw/build/fw.hex                    # Linea 1030 (offset 0x1014) en fw.hex -> 0x1018
+```
+
+Los tres valores coinciden en **`0x1018`**. Esto valida que el linker, el compilador y el empaquetador están alineados.
+
+> *Nota:* se puede saber en la linea 1030 esta el campo `reset_handler` porque se usa la misma formula que antes. En `fw_image.h` se define que en el offset 0x14 esta `reset_handler`, que en memoria seria la direccion $0x1014 = 4116$ bytes, por lo tanto la cantidad de palabras previas es $4116 / 4 = 1029$, que es la linea 1030 en `fw.hex`
+
+### Paso 4: Comprobar la inicialización de memoria (VMA vs LMA)
+
+Acá se analiza cómo viajan las variables globales inicializadas (`.data`) y las que van a cero (`.bss`):
+
+```bash
+$ riscv64-unknown-elf-readelf -S -l fw/build/app.elf
+$ riscv64-unknown-elf-nm -n fw/build/app.elf
+$ make -C fw sim APP_SRC="print.c test_data_bss.c" CORRUPT=0
+```
+
+Con `readelf -l` se observó la diferencia entre **VMA (Virtual Memory Address)** y **LMA (Load Memory Address)** para la sección de `.data`:
+
+- En ejecución, `.data` vive en la RAM (`VirtAddr` en el rango `0x00020000`).
+- Pero en la imagen almacenada, sus valores iniciales residen en la ROM (`PhysAddr` dentro del bloque de `APP_ROM` que empieza en  `0x1000`).
+- Los símbolos `_sidata`, `_sdata` y `_edata` delimitaban exactamente ese rango de copia, mientras que `_sbss` y `_ebss` marcaban el bloque de RAM que el startup debía limpiar a cero.
+
+`test_data_bss.c` verifica que la variable con valor `0x1234ABCD` y el arreglo `{1, 2, 3, 4}` estan correctamente copiados en RAM, y que las variables no inicializadas son efectivamente cero.
+
+### Paso 5: Comparar la carga efectiva con `make check`
+
+El último paso cierra la auditoría automatizando la comparación de todo lo anterior:
+
+```bash
+$ make -C fw check
+```
+
+Se toma el archivo empaquetado `fw/build/fw.hex` y lo compara palabra por palabra contra las líneas `loading: ...` registradas en `fw/build/sim.log`. No simula de nuevo, sino que audita el log que ya existe. Por eso debe ejecutarse inmediatamente después de una simulación limpia y válida.
+
+Este tipo de tests nos permiten confirmar que **el transporte y la carga de la imagen en la memoria del core fueron exitosos**. Si el test hubiese fallado con un `FAIL` pero `make check` diera `OK`, sabríamos con certeza que el problema no es de empaquetado ni de carga en memoria, sino un error de lógica en el código C o en los bucles de copia de `Reset_Handler`.
+
+> Osea, mi conclusion es que siempre debe existir un archivo o algo que haga toda esta auditoria y contraste entre distintas fuentes de forma automatizada para verificar que todo salio bien. Y esto nos permite diagnosticar si un problema fue en el empaquetado, la carga o algo de la app.
 
 ## Hito 9 — Preguntas del informe
 
