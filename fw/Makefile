@@ -12,7 +12,6 @@
 #   make disasm      build/bl.dis y build/app.dis
 #   make clean
 #
-<<<<<<< HEAD
 #   TARGET=main                         programa a compilar: un .c con main() de app/ o tests/, sin la
 #                                       extension. Default: main (app/main.c, la app del proyecto).
 #                                       Ej: TARGET=test_fw_status, TARGET=test_adc, TARGET=test_drivers
@@ -22,9 +21,6 @@
 #                                       APP_SRC con el mismo nombre que uno de ellos lo reemplaza.
 #   BUILD=build/otro INSTALL=0          directorio de salida y no pisar fw/fw.hex (lo usa `make test`)
 #   EXTRA_CFLAGS="-I/ruta/inc"          flags extra de compilacion (ej. otra carpeta de headers)
-=======
-#   APP_SRC="print.c test_fw_status.c"  FW anterior; se busca en ../fw/app, ../fw/tests y ../fw/lib/src
->>>>>>> 35c8079eb177b400fbb9e33272a9a174b5e427d7
 #   APP_MARCH=rv32i                     -march del FW (el del TP2: rv32ic, rv32imc... si top.v lo soporta)
 #   CORRUPT=1                           prueba negativa: 1 bit del FW invertido después de firmarlo
 #   STANDALONE=1                        flujo original del FW, sin BL, para comparar
@@ -41,10 +37,7 @@ FW_DIR   ?= $(PLATFORM)/fw
 FW_LIB   ?= $(FW_DIR)/lib
 TOOLS     = $(FW_DIR)/tools
 BUILD     = build
-<<<<<<< HEAD
 INSTALL  ?= 1
-=======
->>>>>>> 35c8079eb177b400fbb9e33272a9a174b5e427d7
 
 # ---------------- Toolchain: /opt/riscv o el disponible en PATH ----------------
 RISCV_BIN ?= $(if $(shell command -v riscv64-unknown-elf-gcc 2>/dev/null),,/opt/riscv/bin/)
@@ -62,11 +55,7 @@ PYTHON ?= python3
 # El FW puede usar el -march del TP2 (rv32ic, rv32imc...) si top.v lo soporta.
 BL_MARCH   = rv32i
 APP_MARCH ?= rv32i
-<<<<<<< HEAD
 COMMON     = -mabi=ilp32 -O2 -ffreestanding -nostdlib -nostartfiles -g -I$(FW_DIR) -I$(FW_LIB)/inc -I$(FW_DIR)/drivers/inc -I$(FW_DIR)/app -I$(FW_DIR)/tests $(EXTRA_CFLAGS)
-=======
-COMMON     = -mabi=ilp32 -O2 -ffreestanding -nostdlib -nostartfiles -g -I$(FW_DIR) -I$(FW_LIB)/inc
->>>>>>> 35c8079eb177b400fbb9e33272a9a174b5e427d7
 # BL: una sección por función (--gc-sections tira lo que no usa de print.c), warnings,
 # y que GCC no convierta loops en llamadas a memcpy/memset (no hay libc)
 BL_CFLAGS  = -march=$(BL_MARCH) $(COMMON) -ffunction-sections -fdata-sections -Wall -fno-tree-loop-distribute-patterns
@@ -74,7 +63,6 @@ APP_CFLAGS = -march=$(APP_MARCH) $(COMMON)
 LDFLAGS    = -Wl,--gc-sections
 LDLIBS     = -lgcc
 
-<<<<<<< HEAD
 include $(FW_DIR)/sources.mk
 # ---------------- Fuentes ----------------
 # El FW es el programa (APP_SRC; por defecto $(TARGET).c, un .c con main() de app/ o tests/) mas
@@ -96,24 +84,11 @@ APP_FILES = $(sort $(foreach f,$(APP_LIBS) $(APP_SRC),$(call src_path,$(f))))
 BL_SRC    = $(FW_DIR)/bootloader/bl_start.S $(FW_DIR)/bootloader/bl_main.c $(FW_LIB)/src/print.c $(FW_LIB)/src/strutils.c
 COMMON_DEPS = $(FW_DIR)/memory_map.ld $(FW_DIR)/fw_image.h $(FW_LIB)/inc/includes.h $(FW_DIR)/config.h $(FW_LIB)/inc/strutils.h \
               $(wildcard $(FW_DIR)/drivers/inc/*.h $(FW_DIR)/app/*.h)
-=======
-# ---------------- Fuentes ----------------
-APP_SRC ?= print.c test_fw_status.c
-src_path  = $(firstword $(wildcard $(1) $(FW_DIR)/$(1) $(FW_DIR)/app/$(notdir $(1)) $(FW_DIR)/tests/$(notdir $(1)) $(FW_LIB)/src/$(notdir $(1))) $(1))
-APP_FILES = $(foreach f,$(APP_SRC),$(call src_path,$(f)))
-# El BL usa print.c y la implementación CRC local (--gc-sections deja solo lo que usa)
-BL_SRC    = $(FW_DIR)/bootloader/bl_start.S $(FW_DIR)/bootloader/bl_main.c $(FW_LIB)/src/print.c $(FW_LIB)/src/strutils.c
-COMMON_DEPS = $(FW_DIR)/memory_map.ld $(FW_DIR)/fw_image.h $(FW_LIB)/inc/includes.h $(FW_DIR)/config.h $(FW_LIB)/inc/strutils.h
->>>>>>> 35c8079eb177b400fbb9e33272a9a174b5e427d7
 
 .PHONY: all install sim check inspect disasm clean FORCE
 .DELETE_ON_ERROR:
 
-<<<<<<< HEAD
 all: $(BUILD)/fw.hex $(BUILD)/bl.sym $(BUILD)/app.sym $(if $(filter 1,$(INSTALL)),install)
-=======
-all: $(BUILD)/fw.hex $(BUILD)/bl.sym $(BUILD)/app.sym install
->>>>>>> 35c8079eb177b400fbb9e33272a9a174b5e427d7
 
 $(BUILD):
 	@mkdir -p $@
@@ -168,11 +143,7 @@ install: $(BUILD)/fw.hex
 
 # ---------------- Simulación y verificación ----------------
 sim: all
-<<<<<<< HEAD
 	cd $(PLATFORM) && $(MAKE) sim SIM_LOG=$(CURDIR)/$(BUILD)/sim.log
-=======
-	cd $(PLATFORM) && $(MAKE) sim 2>&1 | tee $(CURDIR)/$(BUILD)/sim.log
->>>>>>> 35c8079eb177b400fbb9e33272a9a174b5e427d7
 
 check:
 	$(PYTHON) $(TOOLS)/check_load.py --hex $(BUILD)/fw.hex --log $(BUILD)/sim.log --sym $(BUILD)/bl.sym --sym $(BUILD)/app.sym
