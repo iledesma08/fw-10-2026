@@ -1,31 +1,33 @@
 /*
  * bl_start.S — TP4 (Bloque 4): vector table + arranque mínimo del BOOTLOADER
  *
- * Vectores, stack mínimo y transferencia sin retorno (hitos 2 y 5).
- *
- * Datos de la plataforma (platform/rtl/top.v, parámetros de picorv32):
- *   - PROGADDR_RESET = 0x0000_0000: al salir de reset el core EJECUTA lo que hay ahí.
- *   - PROGADDR_IRQ   = 0x0000_0010 (ENABLE_IRQ = 0: no hay IRQs).
- *   - STACKADDR      = 0xFFFF_FFFF: el core NO inicializa sp.
+ * En Cortex-M la vector table es una tabla de DIRECCIONES (SP inicial,
+ * Reset_Handler, NMI, ...) que el core lee solo al salir de reset.
+ * En PicoRV32 (RISC-V) no: al salir de reset el core EJECUTA la instrucción
+ * que está en PROGADDR_RESET (0x0000_0000, default en platform/rtl/top.v) y, si tuviera
+ * IRQs habilitadas, saltaría a PROGADDR_IRQ (0x0000_0010). Por eso la vector
+ * table del BL es una tabla de SALTOS ubicada en esos offsets.
+ * (La del FW, en cambio, sí es de direcciones: ver fw_image.h.)
  */
 
 #define REG_FW_STATUS_ADDR  0x00040000      /* project_config.def: REG_FW_STATUS */
 #define FW_STATUS_FAIL      0xBAD           /* convención de los tests de platform/fw */
 
 /* ------------------------------------------------------------------------ */
-/*  Vector table del BL (bl.ld la tiene que ubicar en 0x0000_0000)          */
+/*  Vector table del BL (bl.ld la ubica en 0x0000_0000)                     */
 /* ------------------------------------------------------------------------ */
     .section .vectors, "ax"
     .option push
-    .option norvc                   /* instrucciones de 4 bytes: los offsets importan */
+    .option norvc                   /* saltos de 4 bytes aunque se compile con -march=..c: */
+                                    /* si no, el vector de IRQ no caería en 0x10           */
     .globl  _bl_vectors
     .type   _bl_vectors, @function
 _bl_vectors:
-    j bl_reset_handler  # offset 0x00: arranque normal
-    j bl_unexpected     # offset 0x04: hueco defensivo
-    j bl_unexpected     # offset 0x08: hueco defensivo
-    j bl_unexpected     # offset 0x0C: hueco defensivo
-    j bl_unexpected     # offset 0x10: entrada IRQ (PROGADDR_IRQ segun top.v)
+    j       bl_reset_handler        /* 0x00  PROGADDR_RESET                          */
+    j       bl_unexpected           /* 0x04  no es vector en PicoRV32                */
+    j       bl_unexpected           /* 0x08  no es vector en PicoRV32                */
+    j       bl_unexpected           /* 0x0C  no es vector en PicoRV32                */
+    j       bl_unexpected           /* 0x10  PROGADDR_IRQ (con ENABLE_IRQ=0 no se usa) */
     .size   _bl_vectors, . - _bl_vectors
     .option pop
 
@@ -36,26 +38,37 @@ _bl_vectors:
     .globl  bl_reset_handler
     .type   bl_reset_handler, @function
 bl_reset_handler:
-    la sp, _bl_stack_top  # dirección del extremo superior de RAM
-    call bl_main         # invoca C y guarda retorno en ra
-    j       bl_unexpected           /* si bl_main volviera (o mientras no esté hecho): FAIL */
+    /* 1) Stack del BL. PicoRV32 no inicializa sp por HW (STACKADDR queda en
+     *    0xFFFF_FFFF en top.v): sin esto, la primera llamada a C rompe todo. */
+    la      sp, _bl_stack_top
+
+    /* 2) .data/.bss del BL: no hay (bl.ld lo garantiza con ASSERT), así que
+     *    no hay nada que copiar ni poner en cero. Ese es el "init mínimo". */
+
+    /* 3) Validar el FW y saltar. bl_main() no vuelve. */
+    call    bl_main
+    j       bl_unexpected           /* si volviera, es un bug: FAIL */
     .size   bl_reset_handler, . - bl_reset_handler
 
 /* ------------------------------------------------------------------------ */
 /*  void bl_jump(uint32_t sp, uint32_t entry)  __attribute__((noreturn))    */
+/*                                                                          */
+/*  Se llama desde C: por la calling convention de RISC-V (ABI ILP32) el    */
+/*  primer argumento llega en a0 y el segundo en a1. Es un SALTO, no una    */
+/*  llamada: jr (sin link) y ra = 0, así el FW no tiene "a dónde volver".   */
 /* ------------------------------------------------------------------------ */
     .section .text.bl_jump, "ax"
     .globl  bl_jump
     .type   bl_jump, @function
 bl_jump:
-    mv sp, a0          # adoptar el stack solicitado por el FW
-    li ra, 0           # quitar una continuación residual hacia el BL
-    jr a1              # saltar al Reset_Handler, sin guardar retorno
+    mv      sp, a0                  /* SP inicial que pide el FW (su vector table) */
+    li      ra, 0
+    jr      a1                      /* -> Reset_Handler del FW                     */
     .size   bl_jump, . - bl_jump
 
 /* ------------------------------------------------------------------------ */
-/*  bl_unexpected: vector inesperado -> FAIL + trap   (YA ESTÁ HECHO)       */
-/*  void bl_halt(void): corta la simulación           (YA ESTÁ HECHO)       */
+/*  bl_unexpected: vector inesperado o bl_main() volvió -> FAIL + trap      */
+/*  void bl_halt(void): corta la simulación                                 */
 /* ------------------------------------------------------------------------ */
     .section .text.bl_halt, "ax"
     .globl  bl_unexpected
@@ -68,8 +81,8 @@ bl_unexpected:
     .globl  bl_halt
     .type   bl_halt, @function
 bl_halt:
-    ebreak                          /* Pregunta: ¿por qué hace falta el ebreak si ya */
-                                    /* dejamos 0xBAD en REG_FW_STATUS?               */
+    ebreak                          /* ENABLE_IRQ=0: ebreak => trap del core =>   */
+                                    /* testbench.sv termina la simulación         */
 1:  j       1b
     .size   bl_halt, . - bl_halt
     .size   bl_unexpected, . - bl_unexpected
