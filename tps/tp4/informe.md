@@ -105,7 +105,7 @@ make -C fw sim STANDALONE=1 APP_SRC="print.c test_data_bss.c" VER_FLAGS="--binar
 | **Combinada** | `0x1234ABCD` | `PASS`, estado `0xFF` | 776217 |
 | **Standalone** | `0x00000000` | `FAIL` (en `.sdata` y `.data`), `TRAP!` | 16028 |
 
-#### ¿Por que falla el arranque original?
+#### Por que falla el arranque original?
 
 El flujo standalone falla porque `startup.S` **no copia las secciones de datos desde ROM a RAM**. Como consecuencia, las variables globales leen el contenido residual de la RAM (`0x00000000` en el simulador) en lugar de sus valores iniciales, provocando que el test detecte el error, escriba `0xBAD` y detenga la simulacion mediante `ebreak`
 
@@ -177,7 +177,7 @@ En `app/app_startup.S` se declara primero la seccion `.fw_header` que mide 24 by
 
 El salto se produce porque `.word Reset_Handler` le indica al linker que en esa parte del header ponga la direccion del simbolo `Reset_Handler`, y como cada palabra ocupa 4 bytes y esta es la sexta palabra desde el inicio de la ROM para la app, esta en `0x1014`. Por eso el linker escribe 0x1018 en 0x1014, luego el Bootloader lee esta direccion y le ordena a la CPU saltar ahi.
 
-#### ¿Que hay de `0x1000` a `0x1003`?
+#### Que hay de `0x1000` a `0x1003`?
 
 En la linea 1025 de `fw.hex` esta la palabra `46345054`:
 
@@ -278,7 +278,7 @@ El Makefile orquesta el proceso para transformar el codigo fuente en una imagen 
 4. **Formateo para el testbench:** Mediante `hexdump`, traduce `fw.bin` al archivo de texto `fw.hex`, que es el formato que lee el testbench de Verilog con `init_memory()`
 5. **Ejecucion y verificacion:** `make sim` corre Verilator capturando el log, y `make check` audita que lo cargado en memoria coincida exactamente con el binario generado.
 
-#### ¿Por que compilar `bl.elf` y `app.elf` por separado?
+#### Por que compilar `bl.elf` y `app.elf` por separado?
 
 Porque representan dos entidades de software totalmente independientes con roles, ciclos de vida y layouts de memoria distintos:
 
@@ -287,13 +287,13 @@ Porque representan dos entidades de software totalmente independientes con roles
 
 Enlazarlos por separado garantiza el aislamiento: evita que el linker resuelva simbolos cruzados accidentalmente (como que el BL llame funciones privadas del FW o comparta codigo sin querer). El unico canal de comunicacion entre ambos es el contrato formal definido por la cabecera (`fw_header_t`) y los registros al momento del salto (`a0` y `a1`). Ademas, en un entorno real, esto permite actualizar el firmware sin necesidad de recompilar ni tocar el bootloader pregrabado.
 
-#### ¿Que direccion usa `objcopy -O binary` para `.data`?
+#### Que direccion usa `objcopy -O binary` para `.data`?
 
 Utiliza la **LMA** (Load Memory Address, direccion de carga en ROM) y no la **VMA** (Virtual Memory Address, direccion de enlace en RAM).
 
 En sistemas embebidos, los valores iniciales de las variables globales deben almacenarse en memoria no volatil (ROM). Si `objcopy` utilizara la VMA (`0x00020000`), interpretaria que debe generar un archivo con un hueco gigantesco de ceros entre el fin del codigo en ROM (`0x145B`) y la RAM (`0x20000`), creando un binario innecesariamente enorme. Al usar la LMA, `objcopy` empaqueta los datos iniciales pegados inmediatamente despues del codigo dentro de la imagen ROM. Luego, es tarea del `Reset_Handler` copiar esos bytes desde la ROM a su ubicacion final en RAM antes de entrar a `main`.
 
-#### ¿Que agrega `mkimage.py` entre el BL y el FW?
+#### Que agrega `mkimage.py` entre el BL y el FW?
 
 Agrega un relleno de ceros **(padding)** desde el final del binario del Bootloader (alrededor de `0x03F8`) hasta el inicio del slot del Firmware en `0x1000`.
 
@@ -339,7 +339,7 @@ Relinkear el firmware a `0x1000` no produce una simple traslacion aritmetica de 
 
 ### 5. jr frente a jalr ra y recarga de stack
 
-#### ¿Por que el salto se realiza con `jr` y no con `jalr ra`?
+#### Por que el salto se realiza con `jr` y no con `jalr ra`?
 
 La diferencia fundamental esta en si queremos que el procesador guarde o no una direccion de retorno:
 
@@ -347,7 +347,7 @@ La diferencia fundamental esta en si queremos que el procesador guarde o no una 
 
 - **Por que usamos `jr a1`:** En RISC-V, `jr a1` es equivalente `jalr x0, 0(a1)`. Al indicar como destino el registro `x0` (cableado permanentemente a cero), el hardware descarta fisicamente la direccion de retorno. Comunica de forma explicita que es un salto definitivo y sin regreso. Ademas, justo antes del salto ejecutamos `li ra, 0` para limpiar cualquier retorno viejo que haya quedado en `ra`: si el Firmware alguna vez intentara volver, saltara a la direccion `0x0`, provocando un reinicio limpio o un fallo controlado en vez de ejecutar basura
 
-#### ¿Por que el FW vuelve a cargar `sp` si el BL ya lo configuro?
+#### Por que el FW vuelve a cargar `sp` si el BL ya lo configuro?
 
 En `app_startup.S`, la primera instruccion de `Reset_Handler` es `la sp, _stack_top`, repitiendo el valor que el Bootloader acaba de colocar en `sp`. Esto responde a principios fundamentales de diseno de software embebido:
 
@@ -357,13 +357,13 @@ En `app_startup.S`, la primera instruccion de `Reset_Handler` es `la sp, _stack_
 
 ### 6. Exito y error
 
-#### ¿Por que el Bootloader no puede escribir `0xFF`?
+#### Por que el Bootloader no puede escribir `0xFF`?
 
 Porque en el testbench, el valor `0xFF` en `REGISTER_FW_STATUS` representa la finalizacion exitosa de toda la prueba
 
 El Bootloader es un cargador previo: su rol termina cuando valida la imagen y cede el control. Si el Bootloader escribiera `0xFF` al comprobar que el header o el CRC son validos, el testbench interpretaria que el test general concluyo, cortaria la simulacion inmediatamente y el Firmware jamas llegaria a ejecutarse. Por este motivo, el Bootloader mantiene el registro en `0` (o estados intermedios) y le delega exclusivamente a la aplicacion final la responsabilidad de declarar el exito tras completar sus chequeos.
 
-#### ¿Por que ante un error no alcanza con escribir `0xBAD`?
+#### Por que ante un error no alcanza con escribir `0xBAD`?
 
 El registro con el valor `0xBAD` sirve como diagnostico para inspeccionar en las ondas (*waveforms*) o en consola que ocurrio, pero no detiene la simulacion.
 
@@ -377,13 +377,13 @@ Para forzar la detencion inmediata por falla, el software debe satisfacer la seg
 
 ### 7. Funciones de strutils y ausencia de libc
 
-#### ¿Que funciones de `strutils` quedan en `bl.elf`?
+#### Que funciones de `strutils` quedan en `bl.elf`?
 
 Al ver los simbolos del ejecutable final com `riscv64-unknown-elf-nm -n fw/build/bl.elf`, se observa que la **unica** funcion que permanece en el binario es **`str_crc8`**
 
 Ninguna otra funcion de la biblioteca (como `strbuf_append` o `str_trim`) forma parte del ejecutable final del Bootloader
 
-#### ¿Por que el linker solo incluye `str_crc8`?
+#### Por que el linker solo incluye `str_crc8`?
 
 Esto es el resultado directo de la combinacion de dos banderas de optimizacion en la cadena de compilacion:
 
@@ -409,7 +409,7 @@ Para cumplir con este requisito, la tabla de vectores en `bl_start.S` se diseno 
 
 Esta estructura geometrica supone de forma que cada instruccion `j` ocupa exactamente 4 bytes ($4 \text{ instrucciones} \times 4\text{ bytes} = 16\text{ bytes} = \text{offset } 0x10$)
 
-#### ¿Que pasaria si se compila con `rv32ic` sin `.option norvc`?
+#### Que pasaria si se compila con `rv32ic` sin `.option norvc`?
 
 La extension `C` (Compressed) de RISC-V incorpora instrucciones de longitud variable de 16 bits (2 bytes). La instruccion de salto incondicional a distancias cortas `j` dispone de su variante comprimida `c.j`.
 
