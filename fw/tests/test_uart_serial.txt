@@ -3,7 +3,7 @@
 # un rato y manda 'S'; 'R' = manda 'R' flags (bit0 framing, bit1 overrun) y los limpia.
 baud 32
 gap 0
-timeout 300000
+timeout 600000
 
 # 1. la app anuncia que arranco
 < 4B

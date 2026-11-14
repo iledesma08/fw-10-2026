@@ -71,6 +71,40 @@ Resultado obtenido: **`RESULT: PASS`** (con `REG_FW_STATUS = 0xFF`).
 
 ### UART1
 
+A diferencia de UART0 (que opera por bloques en un buffer de memoria), UART1 es una UART serial 8N1 conectada a dos FIFOs de 16 bytes (RX y TX).
+
+#### Test
+
+Se validó el driver utilizando el test provisto por la cátedra (`fw/tests/test_uart_serial.c` y `fw/tests/test_uart_serial.txt`).
+
+La prueba verifica:
+
+1. Arranque del firmware y emisión del carácter de inicio `'K'`.
+2. Eco íntegro de 256 bytes (`0x00` a `0xFF`) en bloques de 64 bytes.
+3. Eco de secuencias similares al protocolo del TP.
+4. Detección y registro de *framing error* al recibir un byte con bit de stop en 0.
+5. Detección de *overrun* al inyectar 40 bytes mientras el microcontrolador no lee el FIFO.
+6. Limpieza de los flags de error tras llamar a `uart1_clear_errors()`.
+
+Originalmente, el archivo de prueba `fw/tests/test_uart_serial.txt` fijaba un timeout inicial de 300.000 ciclos de clock (`timeout 300000`) para esperar el byte `'K'`.
+
+Al correr la imagen completa integrada con el Bootloader del TP4:
+
+- El Bootloader imprime mensajes de diagnóstico por UART0 y calcula el CRC-8 completo de la imagen del firmware en Flash, consumiendo aproximadamente 350000 ciclos de reloj antes de saltar al punto de entrada de la aplicación (`Reset_Handler` / `main()`).
+- En consecuencia, el testbench de Verilog abortaba por timeout a los 300000 ciclos, justo instantes antes de que el Bootloader pase el control al firmware.
+
+Para solucionar esto sin usar el modo `STANDALONE=1` (que saltea el Bootloader e inicia en aprox. 20000 ciclos), se incrementó el timeout inicial en `fw/tests/test_uart_serial.txt` a 600000 ciclos (`timeout 600000`), otorgando el margen necesario para que el Bootloader valide la imagen y transfiera el control a la aplicación.
+
+Con este ajuste, el test corre exitosamente tanto en modo integrado (normal) como en modo standalone.
+
+Comandos utilizados para compilar y ejecutar la simulación:
+
+```bash
+make -C fw TARGET=test_uart_serial
+
+./obj_dir/Vtestbench +UART1_SCRIPT=fw/tests/test_uart_serial.txt
+```
+
 ## Hito 3: Driver de DMA
 
 ## Hito 4: Driver de ADC
