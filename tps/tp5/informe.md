@@ -2,13 +2,45 @@
 
 ## Hito 1: Driver de LED
 
-Si idx no es válido (no cumple `idx >= 0 && idx < 8`), las funciones de escritura descartan la operación sin alterar el registro, y funciones de lectura como `led_get_status` retornan 0.
+#### 1. Diseño, Encapsulamiento y Manipulación de Bits
 
-Use esta politica y no otra por varias razones:
+El periférico de LEDs cuenta con un único registro de hardware de 32 bits (`REG_LED` en `0x4_0038`) del cual solo los 8 bits menos significativos están conectados. El diseño del driver se basó en los siguientes principios:
 
-- Como las funciones de escritura no pueden devolver nada, no puedo hacer que devuelvan un codigo de error o -1 por ejemplo
-- Inducir un crash o disparar una excepcion me parece exagerado, encender el LED no es una tarea critica y no poder encender un LED inexistente no me parece algo suficientemente importante como para detener el sistema.
-- Usar el modulo `idx % 8` para que, por ejemplo, al pasar idx = 8 incumple la consigna de no modificar el registro
+- **Encapsulamiento del hardware:** El acceso directo a `REG_LED` queda restringido exclusivamente a `fw/drivers/src/led.c`. La aplicación y otros módulos solo pueden interactuar mediante la API pública de `fw/drivers/inc/led.h`.
+- **Modificación selectiva de bits (Read-Modify-Write):** Para operar sobre un LED individual sin alterar el estado de los demás, se emplean máscaras de desplazamiento `(1u << idx)`:
+  - `led_on`: `REG_LED |= (1u << idx);` para encender (SET).
+  - `led_off`: `REG_LED &= ~(1u << idx);` para apagar (CLEAR).
+  - `led_toggle`: `REG_LED ^= (1u << idx);` para conmutar con una única operación XOR.
+  - `led_get_status`: `(REG_LED >> idx) & 1;` para extraer el bit como booleano (`0` o `1`).
+- **Política para índices fuera de rango (`idx >= 8`):**
+  Como el hardware solo posee 8 LEDs (índices `0` a `7`), cualquier índice `idx >= 8` se considera inválido:
+  - Las funciones de escritura (`led_on`, `led_off`, `led_toggle`) descartan la operación de inmediato sin alterar el registro.
+  - La función de lectura (`led_get_status`) retorna `0`.
+  - **Justificación:**
+    1. Las funciones de escritura tienen firma `void`, por lo que no pueden devolver un código de error numérico (como `-1`).
+    2. Disparar una excepción o un cuelgue del sistema (`ebreak`/`trap`) resulta desmedido para un periférico visual no crítico.
+    3. Aplicar una operación como `idx % 8` encendería un LED erróneo (por ejemplo, índice 8 prendería el LED 0), violando el requerimiento de no alterar el estado ante entradas inválidas.
+
+#### 2. Test
+
+Hice un test en `fw/tests/test_led.c` que valida:
+
+1. Inicialización (`led_init`) comprobando que el registro `REG_LED` y la máscara queden en 0.
+2. Encendido individual (`led_on`) y verificación de estado (`led_get_status`) en bits clave (extremos e intermedios).
+3. Apagado individual (`led_off`) verificando la puesta a cero del bit correspondiente sin modificar los demás.
+4. Conmutación de estado (`led_toggle`) validando tanto la transición `0 -> 1` como `1 -> 0`.
+5. Escritura directa (`led_write`) y configuración de máscara completa (`led_set_mask` / `led_get_mask`).
+6. Manejo de índices fuera de rango (`idx = 8, 9, 15, 255`): verifica que `REG_LED` conserve exactamente su valor previo y que `led_get_status` devuelva 0.
+
+Comandos utilizados para compilar y ejecutar la simulación:
+
+```bash
+make -C fw TARGET=test_led
+
+make sim
+```
+
+Resultado obtenido: **`RESULT: PASS`** (con `REG_FW_STATUS = 0xFF`).
 
 ## Hito 2: Drivers de UART
 
