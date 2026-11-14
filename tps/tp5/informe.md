@@ -248,6 +248,92 @@ RESULT: PASS
 
 ## Hito 4: Driver de DMA
 
+El bloque de DMA permite transferir bloques contiguos de palabras de 32 bits (4 bytes) directamente entre direcciones del mapa de memoria sin intervención continua del procesador, liberando ciclos de CPU.
+
+### 1. Paso a paso de la implementación
+
+El hardware del DMA (`rtl/dma.v`) opera de forma autónoma: al recibir un pulso en `REG_DMA_START`, una máquina de estados recorre las direcciones leyendo una palabra del origen y escribiéndola en el destino, incrementando internamente su contador de direcciones (`address_count`) y marcando `REG_DMA_DONE = 1` al finalizar.
+
+Las funciones implementadas en `fw/drivers/src/dma.c` son:
+
+- `dma_init()`: pone `REG_DMA_START` en 0 para garantizar que el DMA quede listo para detectar el próximo flanco ascendente y asi comenzar la copia.
+- `dma_is_done()`: verifica si la operación de copia del DMA ha finalizado (1 si la transferencia finalizó o está inactivo, 0 si está transfiriendo datos).
+- `dma_copy(src, dst, n_words)`:
+  - **Validaciones de seguridad (guardas):** verifica que `n_words > 0`, que ni `src` ni `dst` sean `NULL`, que `src != dst`, y que ambas direcciones estén alineadas a 4 bytes (`((uintptr_t)addr & 0x3) == 0`). Si alguna condición falla, retorna inmediatamente sin modificar el hardware ni la memoria.
+  1. Escribe las direcciones numéricas en `REG_DMA_SOURCE_ADDR` y `REG_DMA_DEST_ADDR`, y la cantidad de palabras en `REG_DMA_SIZE`.
+  2. Genera un flanco de subida escribiendo 0 y luego 1 en `REG_DMA_START`.
+  3. Espera activamente con `while (!dma_is_done())` hasta que el periférico complete la ráfaga.
+  4. Vuelve a poner `REG_DMA_START = 0` para dejar la señal lista para la siguiente operación.
+
+### 2. Decisiones técnicas
+
+#### Pregunta de control: ¿Qué pasa si `dst` y `src` se solapan? ¿Cómo lo documentaron?
+
+En el módulo Verilog `rtl/dma.v`, el hardware recorre las direcciones de memoria de manera estrictamente ascendente (desde el índice 0 hasta `n_words - 1` incrementando `address_count << 2`):
+
+- **Si `dst < src`:** La copia se ejecuta correctamente aun si se solapan, ya que cada palabra de `src` se lee antes de que el puntero de escritura de `dst` alcance esa misma posición.
+- **Si `dst > src`:** Al solaparse los rangos, las primeras escrituras en `dst` sobreescribirán las palabras superiores de `src` antes de que el DMA haya tenido oportunidad de leerlas, corrompiendo los datos restantes de la transferencia.
+
+**Cómo se documentó:** Se documentó en el header público `fw/drivers/inc/dma.h` mediante una etiqueta `@warning` en el docstring de `dma_copy()`, advirtiendo explícitamente que los buffers no deben solaparse con `dst > src` (comportamiento idéntico al contrato estándar de `memcpy` en C).
+
+#### Casteo de punteros con `uintptr_t`
+
+Al implementar las validaciones de alineación, necesité comprobar que los dos bits menos significativos de las direcciones fueran cero (`& 0x3`). Como en C el compilador no permite aplicar operadores a nivel de bits directamente sobre punteros (`void *`), tuve que convertirlos a un tipo entero.
+
+Al buscar cuál era el tipo correcto para hacer operaciones con direcciones en C, encontré `uintptr_t`, que está diseñado específicamente para alojar punteros sin pérdida de información. Por coherencia, decidí usar `uintptr_t` tanto para el chequeo de alineación (`(uintptr_t)src & 0x3`) como para la conversión previa a escribir el registro MMIO de 32 bits (`(uint32_t)(uintptr_t)src`), evitando además posibles advertencias del compilador de pointer-to-int-cast.
+
+#### Modo sincrónico (espera activa)
+
+Aunque el bloque de DMA funciona de forma asincrónica en hardware, la función `dma_copy` espera activamente a que `dma_is_done()` devuelva 1. Esto se decidió para evitar condiciones de carrera en el firmware, garantizando que cuando la función retorne, los datos ya estén disponibles en el buffer de destino para ser consumidos inmediatamente por el código que la invocó.
+
+### 3. Errores encontrados y resolución
+
+**Chequeo prematuro de `dma_is_done()` al inicio:** En una versión preliminar del test, se comprobaba `dma_is_done()` inmediatamente tras `dma_init()`. El testbench abortó con trap porque en la descripción de hardware (`rtl/dma.v`) el registro `dma_done` arranca en 0 en el reset del sistema y solo pasa a 1 tras completar la primera transferencia. Se ajustó el test para validar `dma_is_done()` tras haber disparado transferencias.
+
+### 4. Evidencia de validación
+
+Se implementó el test unitario `fw/tests/test_dma_driver.c`, el cual valida:
+
+1. Copia normal de un bloque de 32 palabras entre arreglos en RAM, verificando que los datos coincidan y que las posiciones adyacentes de memoria no hayan sido sobreescritas.
+2. Guardas defensivas contra argumentos inválidos:
+   - `n_words == 0`: confirma que el buffer de destino permanezca intacto.
+   - Punteros nulos (`src == NULL` y `dst == NULL`): retorna sin modificaciones en memoria.
+   - Direcciones no alineadas (offsets de 1 y 2 bytes): verifica que la operación no se realice y cause transferencias erróneas.
+   - Punteros idénticos (`src == dst`): no realiza ninguna operación redundante.
+3. Múltiples copias sucesivas con tamaños variables (de 1 a 16 palabras) para comprobar que el driver maneje transferencias consecutivas sin trabarse.
+
+Comandos ejecutados:
+
+```bash
+make -C fw TARGET=test_dma_driver
+make sim
+```
+
+Salida de la simulación:
+
+```text
+UART: [BL] TP4 bootloader: arranque desde reset (0x00000000)
+UART: [BL] buscando FW en 0x00001000
+UART: [BL]   magic      = 0x46345054
+UART: [BL]   image_size = 0x000006F8
+UART: [BL]   crc header = 0x0000003F
+UART: [BL]   crc calc.  = 0x0000003F
+UART: [BL]   initial_sp = 0x00040000
+UART: [BL]   reset      = 0x00001018
+UART: [BL] FW OK -> salto al Reset_Handler del FW
+UART: [TEST DMA]: Iniciando test del driver de DMA...
+UART: [TEST DMA]: Todos los checks pasaron con exito!
+ending simulation, u_top.u_register_file.REGISTER_FW_STATUS = 000000ff
+total clocks:               810515
+--- mem report ---
+-- total mem access =                 4506
+ READ =                 3304, WRITE =                 1202
+-- total instruction access =               189554
+ READ =               189554, WRITE =                    0
+RESULT: PASS
+- rtl/testbench.sv:123: Verilog $finish
+```
+
 ## Hito 5: Driver de ADC
 
 ## Hito 6: Integración en app de demo
