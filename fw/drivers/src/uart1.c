@@ -1,9 +1,9 @@
 /**
  * @file uart1.c
  * @brief Implementacion del driver para UART1 (UART serie 8N1 con FIFOs de
- * hardware).
+ * hardware)
  *
- * TP6: completar uart1_set_rts().
+ * TP6: completar uart1_set_rts()
  */
 #include "uart1.h"
 
@@ -21,10 +21,10 @@ int uart1_getc(uint8_t *b) {
     if (b) {
       *b = (uint8_t)(rx & 0xFF); // Guardar el byte recibido en *b
     }
-    return 1; // Había dato
+    return 1; // Habia dato
   }
 
-  return 0; // FIFO vacío, no tocamos *b
+  return 0; // FIFO vacio, no tocamos *b
 }
 
 void uart1_putc(uint8_t b) {
@@ -52,7 +52,7 @@ uint32_t uart1_errors(void) {
 
   /* Como los numeros de bit en hardware (2 y 3) no coinciden con los de la
    * funcion (0 y 1) los "traducimos" a los flags de error que devuelve la
-   * funcion.
+   * funcion
    */
   if (st & UART1_ST_FRAME_ERR) {
     err |= UART1_ERR_FRAME;

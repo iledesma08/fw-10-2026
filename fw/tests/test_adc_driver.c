@@ -1,16 +1,16 @@
 /*
- * Test del driver de ADC para el Hito 5 del TP5.
+ * Test del driver de ADC para el Hito 5 del TP5
  *
  * Chequeo minimo pedido: obtener una lectura del ADC e imprimirla por UART.
  * Ademas se validan los casos borde del driver y se cubre el divisor 0, que
- * es el que colgaba la simulacion antes de la correccion.
+ * es el que colgaba la simulacion antes de la correccion
  */
 #include "adc.h"
 #include "includes.h"
 
 static uint32_t samples[REG_ARRAY_ADC_BUFF_SIZE];
 
-/* Mismo criterio que w3a de test_drivers.c: la senal debe variar. */
+/* Mismo criterio que w3a de test_drivers.c: la senal debe variar */
 static int samples_vary(const uint32_t *data, uint32_t size) {
   uint32_t different = 0;
 
@@ -50,7 +50,7 @@ int main(void) {
 
   print_str("[TEST ADC]: Iniciando test del driver de ADC...\n");
 
-  /* 1. Guardas de argumentos invalidos. */
+  /* 1. Guardas de argumentos invalidos */
   if (adc_read(NULL, 8) != 0) {
     return fail("adc_read(NULL, 8) debe devolver 0");
   }
@@ -58,13 +58,13 @@ int main(void) {
     return fail("adc_read(samples, 0) debe devolver 0");
   }
 
-  /* 2. Configuracion explicita del divisor. */
+  /* 2. Configuracion explicita del divisor */
   adc_init(4);
   if (REG_ADC_CLK_DIVIDER != 4) {
     return fail("adc_init(4) no configuro el divisor");
   }
 
-  /* 3. Lectura completa por la API publica. */
+  /* 3. Lectura completa por la API publica */
   n = adc_read(samples, REG_ARRAY_ADC_BUFF_SIZE);
   if (n != REG_ARRAY_ADC_BUFF_SIZE) {
     return fail("adc_read no devolvio 256 muestras");
@@ -76,11 +76,11 @@ int main(void) {
     return fail("las muestras leidas no varian");
   }
 
-  /* 4. Chequeo minimo: imprimir la lectura por UART. */
+  /* 4. Chequeo minimo: imprimir la lectura por UART */
   print_str("-- ADC data read (div=4) --\n");
   print_samples(samples, REG_ARRAY_ADC_BUFF_SIZE);
 
-  /* 5. Otra lectura con distinto divisor: adc_read debe disparar de nuevo. */
+  /* 5. Otra lectura con distinto divisor: adc_read debe disparar de nuevo */
   set_adc_clk_divider(8);
   n = adc_read(samples, REG_ARRAY_ADC_BUFF_SIZE);
   if (n != REG_ARRAY_ADC_BUFF_SIZE) {
@@ -91,7 +91,7 @@ int main(void) {
   }
   print_str("-- ADC segunda lectura (div=8) OK --\n");
 
-  /* 6. Divisor 0: el driver debe forzar 1 y no colgarse. */
+  /* 6. Divisor 0: el driver debe forzar 1 y no colgarse */
   set_adc_clk_divider(0);
   n = adc_read(samples, REG_ARRAY_ADC_BUFF_SIZE);
   if (n != REG_ARRAY_ADC_BUFF_SIZE) {

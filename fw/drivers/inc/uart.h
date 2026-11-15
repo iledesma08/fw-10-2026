@@ -1,6 +1,6 @@
 /**
  * @file uart.h
- * @brief Driver para el periférico UART0 (transmisión por buffer).
+ * @brief Driver para el periferico UART0 (transmision por buffer)
  */
 
 #ifndef UART_H
@@ -9,24 +9,24 @@
 #include <stdint.h>
 
 /**
- * @brief Inicializa el periférico UART.
+ * @brief Inicializa el periferico UART
  *
- * Esta función configura el periférico UART para su uso.
+ * Esta funcion configura el periferico UART para su uso
  */
 void uart_init(void);
 
 /**
- * @brief Envía un solo byte a través del periférico UART.
+ * @brief Envia un solo byte a traves del periferico UART
  *
- * @param c El byte a enviar.
+ * @param c El byte a enviar
  */
 void uart_write_byte(char c);
 
 /**
- * @brief Envía una cadena de caracteres a través de UART.
+ * @brief Envia una cadena de caracteres a traves de UART
  *
  * @param s La cadena de caracteres a enviar. Debe ser una cadena terminada en
- * nulo.
+ * nulo
  */
 void uart_write_str(const char *s);
 

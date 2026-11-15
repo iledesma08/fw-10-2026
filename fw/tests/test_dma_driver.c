@@ -5,7 +5,7 @@
 #define TEST_SIZE 32
 
 /* Creamos los arreglos con 4 palabras extra de margen para verificar que el
- * hardware no escriba fuera de los límites */
+ * hardware no escriba fuera de los limites */
 static uint32_t src_buf[TEST_SIZE + 4];
 static uint32_t dst_buf[TEST_SIZE + 4];
 
@@ -79,7 +79,7 @@ int main(void) {
   dst_buf[0] = 0xAAAAAAAA;
   const void *unaligned_src =
       (const void *)((uintptr_t)src_buf +
-                     1); // El +1 hace que el puntero no esté alineado a 4 bytes
+                     1); // El +1 hace que el puntero no este alineado a 4 bytes
                          // sino a 1 byte
   dma_copy(unaligned_src, dst_buf, 4);
   if (dst_buf[0] != 0xAAAAAAAA) {
@@ -89,7 +89,7 @@ int main(void) {
 
   /* 3.d Puntero dst no alineado a 4 bytes  */
   void *unaligned_dst =
-      (void *)((uintptr_t)dst_buf + 2); // El +2 hace que el puntero no esté
+      (void *)((uintptr_t)dst_buf + 2); // El +2 hace que el puntero no este
                                         // alineado a 4 bytes sino a 2 bytes
   dma_copy(src_buf, unaligned_dst, 4);
   if (dst_buf[0] != 0xAAAAAAAA) {

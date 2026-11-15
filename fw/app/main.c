@@ -7,7 +7,7 @@
 #define N_WORDS 4
 #define CLK_DIV 4
 
-/* Verifica la mascara de LEDs contra el valor esperado e informa por UART. */
+/* Verifica la mascara de LEDs contra el valor esperado e informa por UART */
 static int check_led_mask(unsigned int expected) {
   unsigned int mask = led_get_mask();
 

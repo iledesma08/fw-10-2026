@@ -9,9 +9,9 @@ void uart_init(void) {
 }
 
 /**
- * @brief Funcion auxiliar para enviar un buffer de datos por UART.
- * @param buf Buffer a enviar.
- * @param len El tamaño del buffer a enviar.
+ * @brief Funcion auxiliar para enviar un buffer de datos por UART
+ * @param buf Buffer a enviar
+ * @param len El tamano del buffer a enviar
  */
 static void uart_send_buffer(const char *buf, uint32_t len) {
   if (!buf || len == 0) {
