@@ -50,8 +50,7 @@ uint8_t adc_done(void);
  * que REG_ARRAY_ADC_BUFF_SIZE, se ajusta a ese valor maximo
  *
  * Siempre dispara una adquisicion nueva y espera a que termine, sin depender de
- * REG_ADC_START ni del bit done previos (w3 llama a adc_read() varias veces sin
- * adc_start() entre medio)
+ * REG_ADC_START ni del bit done previos
  *
  * Si el divisor de reloj quedo en 0, lo configura  en 1: el RTL recarga su
  * contador con divisor - 1, por lo que un 0 haria que la primera muestra tarde

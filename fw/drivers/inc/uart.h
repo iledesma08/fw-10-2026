@@ -10,8 +10,6 @@
 
 /**
  * @brief Inicializa el periferico UART
- *
- * Esta funcion configura el periferico UART para su uso
  */
 void uart_init(void);
 

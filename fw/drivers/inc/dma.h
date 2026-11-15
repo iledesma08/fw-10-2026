@@ -31,7 +31,7 @@ void dma_copy(const void *src, void *dst, uint32_t n_words);
 
 /**
  * @brief Verifica si la operacion de copia del DMA ha finalizado retornando el
- * estado del registro `REG_DMA_DONE`
+ * estado del registro REG_DMA_DONE
  * @return 1 si la operacion ha finalizado, 0 en caso contrario
  */
 uint8_t dma_is_done(void);
