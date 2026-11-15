@@ -12,25 +12,7 @@ Se estructuro la capa de drivers separando las interfaces publicas en `fw/driver
 
 ### Por que conviene separar interfaz publica en archivos `.h` e implementacion en archivos `.c`?
 
-Para mi, principalmente por legibilidad y seguridad. El archivo `.h` actua como el contrato de la interfaz publica. Lo que consuma al driver solo necesita saber que servicios ofrece el modulo y como invocarlos, abstrayendose de como interactua internamente con el hardware. Esto mantiene ocultos los detalles de bajo nivel, lo que previene accesos accidentales o indebidos a los registros fuera del driver por ejemplo
-
-### Testbench de simulacion
-
-`obj_dir/Vtestbench` lo genera Verilator. Se construye una vez con:
-
-```bash
-verilator --binary --trace -Wno-fatal -f filelist.f
-```
-
-`make sim` construye y ejecuta el testbench, por eso los hitos 2, 3.a y 4 no necesitan el paso previo. En cambio, los hitos que llaman directamente a `./obj_dir/Vtestbench` (3.b, 5 y 6) requieren que el binario exista (despues de `make clean` en la raiz hay que regenerarlo)
-
-### Args del testbench
-
-En los ultimos hitos, el testbench se configura con argumentos:
-
-**Por que `+NOWAVE`.** Por defecto el testbench ejecuta `$dumpfile("wave.vcd")` y `$dumpvars`, que registran todas las senales en cada ciclo. En corridas de millones de ciclos el VCD crece mucho y la simulacion se vuelve mas lenta. En los hitos 5 y 6 la evidencia es la salida de UART0 y el `RESULT`, no la forma de onda, asi que el archivo no aporta nada, por eso no lo genero
-
-**Por que `+MAX_CYCLES=8000000`.** Sin el arg la simulacion no tiene techo: si el FW se cuelga, el testbench no termina nunca. Con 8M de ciclos hay un timeout, la simulacion termina y reporta `RESULT: TIMEOUT` en lugar de quedar colgada
+Para mi, principalmente por legibilidad y seguridad. El archivo `.h` actua como el contrato de la interfaz publica. Lo que consuma al driver solo necesita saber que servicios ofrece el modulo y como invocarlos, abstrayendose de como interactua internamente con el hardware. Esto mantiene ocultos los detalles de bajo nivel, lo que, por ejemplo, previene accesos accidentales o indebidos a los registros fuera del driver
 
 ## Hito 2: Driver de LED
 
@@ -38,14 +20,15 @@ El periferico de LEDs cuenta con un unico registro de hardware de 32 bits (`REG_
 
 ### 1. Paso a paso de la implementacion
 
-- Se implementaron las siguientes funciones:
-  - `led_init`: limpia el registro poniendo todos los LEDs en estado apagado
-  - `led_on`: enciende el LED correspondiente al indice idx aplicando una OR: `*reg |= (1 << idx)`
-  - `led_off`: apaga el LED correspondiente al indice idx aplicando una AND con el complemento: `*reg &= ~(1 << idx)`
-  - `led_toggle`: alterna el estado del LED correspondiente al indice idx aplicando una XOR: `*reg ^= (1 << idx)`
-  - `led_write`: escribe un valor de 8 bits en el registro de LEDs
-  - `led_set_mask` / `led_get_mask`: configuracion y consulta de la mascara de LEDs
-  - `led_get_status`: retorna el estado actual (`0` o `1`) del LED consultado
+Fui implementando las funciones en el siguiente orden:
+
+- `led_init`: limpia el registro poniendo todos los LEDs en estado apagado
+- `led_on`: enciende el LED correspondiente al indice idx aplicando una OR: `*reg |= (1 << idx)`
+- `led_off`: apaga el LED correspondiente al indice idx aplicando una AND con el complemento: `*reg &= ~(1 << idx)`
+- `led_toggle`: alterna el estado del LED correspondiente al indice idx aplicando una XOR: `*reg ^= (1 << idx)`
+- `led_write`: escribe un valor de 8 bits en el registro de LEDs
+- `led_set_mask` / `led_get_mask`: configuracion y consulta de la mascara de LEDs
+- `led_get_status`: retorna el estado actual (`0` o `1`) del LED consultado
 
 ### 2. Decisiones tecnicas
 
@@ -55,7 +38,7 @@ Use esta politica y no otra por varias razones:
 
 - Como las funciones de escritura no pueden devolver nada, no puedo hacer que devuelvan un codigo de error o -1 por ejemplo
 - Inducir un crash o disparar una excepcion me parece exagerado, encender el LED no es una tarea critica y no poder encender un LED inexistente no me parece algo suficientemente importante como para detener el sistema
-- Usar el modulo `idx % 8` para que, por ejemplo, al pasar idx = 8 incumple la consigna de no modificar el registro
+- Usar el modulo `idx % 8` para que, por ejemplo, al pasar idx = 8 se use el LED 0, incumple la consigna de no modificar el registro cuando idx es invalido
 
 ### 3. Errores encontrados y resolucion
 
@@ -115,15 +98,22 @@ RESULT: PASS
 
 ### Hito 3.a: Driver UART0
 
+UART0 transmite datos organizados en un buffer de tamano fijo (`REG_ARRAY_UART0_BUFF_OUT_SIZE`)
+
 #### 1. Paso a paso de la implementacion
 
-UART0 transmite datos organizados en un buffer de tamano fijo (`REG_ARRAY_UART0_BUFF_OUT_SIZE`). Se realiza la siguiente secuencia:
+Fui implementando las funciones en el siguiente orden:
 
-1. Verificar que no haya transmisiones previas en curso (`REG_UART0_TRANSMISION_DONE == 1`)
-2. Copia de los datos al array de salida `REG_ARRAY_UART0_BUFF_OUT`
-3. Configuracion del tamano del bloque a emitir en `REG_UART0_SIZE_TO_TRANSMIT`
-4. Emision del pulso de inicio escribiendo 1 en `REG_UART0_START_TRANSMISION`
-5. Espera hasta que el periferico confirme el fin de la transmision (`REG_UART0_TRANSMISION_DONE == 1`)
+- `uart_init()`: deja `REG_UART0_START_TRANSMIT = 0`, activa `REG_UART0_DATA_FLUSH = 1` para limpiar el estado del periferico y espera a que `REG_UART0_TRANSMISION_DONE` sea 1
+- `uart_send_buffer(buf, len)` (auxiliar privada `static`): encapsula la secuencia completa de transmision por bloques:
+  1. Valida que `buf` no sea `NULL` y que `len > 0`, acotando `len` a `REG_ARRAY_UART0_BUFF_OUT_SIZE` (256)
+  2. Espera que no haya transmisiones previas en curso (`REG_UART0_TRANSMISION_DONE == 1`)
+  3. Copia los bytes al buffer de salida `REG_ARRAY_UART0_BUFF_OUT`
+  4. Configura la cantidad de bytes a emitir en `REG_UART0_SIZE_TO_TRANSMIT`
+  5. Genera el pulso de inicio escribiendo 1 y luego 0 en `REG_UART0_START_TRANSMIT`
+  6. Espera hasta que el periferico confirme el fin de la transmision (`REG_UART0_TRANSMISION_DONE == 1`)
+- `uart_write_byte(c)`: delega en `uart_send_buffer(&c, 1)` para enviar un unico caracter
+- `uart_write_str(s)`: verifica que `s` no sea nulo ni vacio, calcula su longitud hasta `\0` acotandola a `REG_ARRAY_UART0_BUFF_OUT_SIZE` y llama a `uart_send_buffer(s, len)`
 
 #### 2. Decisiones tecnicas
 
@@ -190,6 +180,8 @@ A diferencia de UART0 (que opera por bloques en un buffer de memoria), UART1 es 
 
 #### 1. Paso a paso de la implementacion
 
+Fui implementando las funciones en el siguiente orden:
+
 - `uart1_init(baud_div)`: programa el divisor en `REG_UART1_BAUD_DIV` y resetea los flags de error
 - `uart1_rx_level()`: lee el nivel de ocupacion actual del FIFO de recepcion desde `REG_UART1_STATUS`
 - `uart1_getc(uint8_t *b)`: si el FIFO RX no esta vacio, extrae el byte, lo guarda en `*b` y retorna 1; si esta vacio, retorna 0
@@ -212,6 +204,7 @@ A diferencia de UART0 (que opera por bloques en un buffer de memoria), UART1 es 
 #### 4. Evidencia de validacion
 
 Se valido con la suite `fw/tests/test_uart_serial.c` y el script de prueba:
+
 1. Arranque del firmware y emision del caracter de inicio `'K'`
 2. Eco integro de 256 bytes (`0x00` a `0xFF`) en bloques de 64 bytes
 3. Eco de secuencias similares al protocolo del TP
@@ -270,20 +263,20 @@ RESULT: PASS
 
 El bloque de DMA permite transferir bloques contiguos de palabras de 32 bits (4 bytes) directamente entre direcciones del mapa de memoria sin intervencion continua del procesador, liberando ciclos de CPU
 
-### 1. Paso a paso de la implementacion
-
 El hardware del DMA (`rtl/dma.v`) opera de forma autonoma: al recibir un pulso en `REG_DMA_START`, una maquina de estados recorre las direcciones leyendo una palabra del origen y escribiendola en el destino, incrementando internamente su contador de direcciones (`address_count`) y marcando `REG_DMA_DONE = 1` al finalizar
 
-Las funciones implementadas en `fw/drivers/src/dma.c` son:
+### 1. Paso a paso de la implementacion
+
+Fui implementando las funciones en el siguiente orden:
 
 - `dma_init()`: pone `REG_DMA_START` en 0 para garantizar que el DMA quede listo para detectar el proximo flanco ascendente y asi comenzar la copia
 - `dma_is_done()`: verifica si la operacion de copia del DMA ha finalizado (1 si la transferencia finalizo o esta inactivo, 0 si esta transfiriendo datos)
 - `dma_copy(src, dst, n_words)`:
-  - **Validaciones de seguridad (guardas):** verifica que `n_words > 0`, que ni `src` ni `dst` sean `NULL`, que `src != dst`, y que ambas direcciones esten alineadas a 4 bytes (`((uintptr_t)addr & 0x3) == 0`). Si alguna condicion falla, retorna inmediatamente sin modificar el hardware ni la memoria
-  1. Escribe las direcciones numericas en `REG_DMA_SOURCE_ADDR` y `REG_DMA_DEST_ADDR`, y la cantidad de palabras en `REG_DMA_SIZE`
-  2. Genera un flanco de subida escribiendo 0 y luego 1 en `REG_DMA_START`
-  3. Espera activamente con `while (!dma_is_done())` hasta que el periferico complete la rafaga
-  4. Vuelve a poner `REG_DMA_START = 0` para dejar la senal lista para la siguiente operacion
+  1. **Politica de seguridad:** verifica que `n_words > 0`, que ni `src` ni `dst` sean `NULL`, que `src != dst`, y que ambas direcciones esten alineadas a 4 bytes (`((uintptr_t)addr & 0x3) == 0`). Si alguna condicion falla, retorna inmediatamente sin modificar el hardware ni la memoria
+  2. Escribe las direcciones numericas en `REG_DMA_SOURCE_ADDR` y `REG_DMA_DEST_ADDR`, y la cantidad de palabras en `REG_DMA_SIZE`
+  3. Genera un flanco de subida escribiendo 0 y luego 1 en `REG_DMA_START`
+  4. Espera activamente con `while (!dma_is_done())` hasta que el periferico complete la rafaga
+  5. Vuelve a poner `REG_DMA_START = 0` para dejar la senal lista para la siguiente operacion
 
 ### 2. Decisiones tecnicas
 
@@ -300,22 +293,22 @@ En el modulo Verilog `rtl/dma.v`, el hardware recorre las direcciones de memoria
 
 Al implementar las validaciones de alineacion, necesite comprobar que los dos bits menos significativos de las direcciones fueran cero (`& 0x3`). Como en C el compilador no permite aplicar operadores a nivel de bits directamente sobre punteros (`void *`), tuve que convertirlos a un tipo entero
 
-Al buscar cual era el tipo correcto para hacer operaciones con direcciones en C, encontre `uintptr_t`, que esta disenado especificamente para alojar punteros sin perdida de informacion. Por coherencia, decidi usar `uintptr_t` tanto para el chequeo de alineacion (`(uintptr_t)src & 0x3`) como para la conversion previa a escribir el registro MMIO de 32 bits (`(uint32_t)(uintptr_t)src`), evitando ademas posibles advertencias del compilador de pointer-to-int-cast
+Al buscar cual era el tipo correcto para hacer operaciones con direcciones en C, encontre `uintptr_t`, que esta disenado especificamente para alojar punteros sin perdida de informacion. Por coherencia, decidi usar `uintptr_t` tanto para el chequeo de alineacion (`(uintptr_t)src & 0x3`) como para la conversion previa a escribir el registro de 32 bits (`(uint32_t)(uintptr_t)src`), evitando ademas posibles advertencias del compilador de pointer-to-int-cast
 
 #### Modo sincronico (espera activa)
 
-Aunque el bloque de DMA funciona de forma asincronica en hardware, la funcion `dma_copy` espera activamente a que `dma_is_done()` devuelva 1. Esto se decidio para evitar condiciones de carrera en el firmware, garantizando que cuando la funcion retorne, los datos ya esten disponibles en el buffer de destino para ser consumidos inmediatamente por el codigo que la invoco
+Aunque el bloque de DMA funciona de forma asincronica en hardware, la funcion `dma_copy` espera activamente a que `dma_is_done()` devuelva 1 antes de retornar. Esto se decidio principalmente porque el test de la catedra (`test_drivers.c`) espera una operacion bloqueante: apenas retorna `dma_copy()`, verifica `dma_is_done()` y lee el buffer de destino asumiendo que los datos ya estan disponibles
 
 ### 3. Errores encontrados y resolucion
 
-**Chequeo prematuro de `dma_is_done()` al inicio:** En una version preliminar del test, se comprobaba `dma_is_done()` inmediatamente tras `dma_init()`. El testbench aborto con trap porque en la descripcion de hardware (`rtl/dma.v`) el registro `dma_done` arranca en 0 en el reset del sistema y solo pasa a 1 tras completar la primera transferencia. Se ajusto el test para validar `dma_is_done()` tras haber disparado transferencias
+Ninguno
 
 ### 4. Evidencia de validacion
 
 Se implemento el test unitario `fw/tests/test_dma_driver.c`, el cual valida:
 
 1. Copia normal de un bloque de 32 palabras entre arreglos en RAM, verificando que los datos coincidan y que las posiciones adyacentes de memoria no hayan sido sobreescritas
-2. Guardas defensivas contra argumentos invalidos:
+2. Politicas defensivas contra argumentos invalidos:
    - `n_words == 0`: confirma que el buffer de destino permanezca intacto
    - Punteros nulos (`src == NULL` y `dst == NULL`): retorna sin modificaciones en memoria
    - Direcciones no alineadas (offsets de 1 y 2 bytes): verifica que la operacion no se realice y cause transferencias erroneas
@@ -356,13 +349,16 @@ RESULT: PASS
 
 ## Hito 5: Driver de ADC
 
+El bloque de ADC captura lotes de 256 muestras digitales de 32 bits a una frecuencia configurable mediante un divisor de reloj, permitiendo operar en modo de captura unica (single) o continua (circular) y senalizando al software tanto la mitad de la adquisicion (`half_done`) como el fin del lote (`acq_done`). 
+
+En hardware (`rtl/adc.sv`), sintetiza y cuantiza internamente una senal analogica de prueba y guarda cada muestra en memoria interna al ritmo del `sample_tick`
+
+Para configurarlo y leer las muestras, el ADC expone tres registros mapeados en memoria (`REG_ADC_START` en `0x0004002C`, `REG_ADC_STATUS` en `0x00040030` y `REG_ADC_CLK_DIVIDER` en `0x00040034`) y un buffer de 256 muestras de 32 bits en `0x00040100` (`REG_ARRAY_ADC_BUFF`)
+
 ### 1. Paso a paso de la implementacion
 
-El ADC expone tres registros mapeados en memoria (`REG_ADC_START` en `0x0004002C`, `REG_ADC_STATUS` en `0x00040030` y `REG_ADC_CLK_DIVIDER` en `0x00040034`) y un buffer de 256 muestras de 32 bits en `0x00040100` (`REG_ARRAY_ADC_BUFF`)
+Fui implementando las funciones en el siguiente orden:
 
-Las funciones implementadas son:
-
-- `set_adc_clk_divider(clk_div)`: escribe directamente `REG_ADC_CLK_DIVIDER`. Se agrego porque `test_drivers.c` la utiliza, aunque la consigna no la pedia explicitamente
 - `adc_init(clk_div)`: setea el divisor y deja `REG_ADC_START = 0`
 - `adc_start(adc_mode)`: escribe 0 en `REG_ADC_START = 0` y luego hace `adc_mode & 0x3`.El `& 0x3` descarta los bits altos y deja solo los dos controles:
   - Bit 0 dispara la captura poniendo un 1 en `i_start[0]` del RTL. Segun lo que entendi, gracias a esto, el RTL puede detectar un flanco de subida, por eso sin este bit una captura nunca arranca
@@ -379,6 +375,7 @@ Las funciones implementadas son:
 - `adc_done()`: hace una lectura bloqueante que espera hasta que el adc termina y devuelve 1
 - `adc_read(data, size)`: valida `data` y `size`, recorta `size` a `REG_ARRAY_ADC_BUFF_SIZE`, asegura un divisor distinto de 0, dispara una captura nueva con `adc_start(1)`, espera con `adc_done()` y copia las muestras al buffer del llamador
   - El flujo de una lectura queda entonces: configuracion del divisor -> flanco de arranque -> espera de fin de adquisicion -> copia del buffer
+- `set_adc_clk_divider(clk_div)`: escribe directamente `REG_ADC_CLK_DIVIDER`. Se agrego porque `test_drivers.c` la utiliza, aunque la consigna no la pedia explicitamente
 
 #### De donde salen las muestras?
 
@@ -386,7 +383,7 @@ Mi primera duda al leer el driver fue de donde salian los valores de `REG_ARRAY_
 
 ### 2. Decisiones tecnicas
 
-- **`adc_done()` bloqueante:** no es un simple getter del bit de estado sino espera a que la conversion termine. El test oficial llama a la funcion una sola vez y enseguida verifica que `done` valga 1, por lo que devolver el estado sin esperar no alcanza, por eso lo hice asi
+- **`adc_done()` bloqueante:** no es un simple getter del bit de estado, tambien espera a que la conversion termine. El test oficial llama a la funcion una sola vez y enseguida verifica que `done` valga 1, por lo que devolver el estado sin esperar no alcanza, por eso lo hice asi
 - **Divisor minimo en `adc_read()`:** el test nunca llama a `adc_init()`, asi que el registro conserva el 0 del reset. Como el RTL recarga el contador con `divisor - 1`, un 0 produce una espera aproximada de 2^32 ciclos, asi que puse para que, si nunca se configuro el divisor, se configure con 1 que es el minimo
 - **Arranque siempre por flanco:** `adc_read()` no depende de `REG_ADC_START` ni del bit done previos, llama siempre a `adc_start(1)`. Asi cada lectura dispara una adquisicion nueva, incluso si el test llama a `adc_read()` varias veces sin reiniciar el periferico
 - **Copia acotada:** si `size` supera el tamano del buffer se recorta a `REG_ARRAY_ADC_BUFF_SIZE` (256); si `data` es NULL o `size` es 0, se retorna 0 sin tocar el hardware
@@ -599,3 +596,22 @@ RESULTADO: OK
 ```
 
 `make -C fw check` termino con `RESULTADO: OK`, confirmando que el CRC y el `Reset_Handler` de la imagen cargada coinciden con `fw.hex`
+
+## Aclaraciones
+
+### Testbench de simulacion
+
+`obj_dir/Vtestbench` lo genera Verilator. Se construye una vez con:
+
+```bash
+verilator --binary --trace -Wno-fatal -f filelist.f
+```
+
+`make sim` construye y ejecuta el testbench, por eso los hitos 2, 3.a y 4 no necesitan el paso previo. En cambio, los hitos que llaman directamente a `./obj_dir/Vtestbench` (3.b, 5 y 6) requieren que el binario exista (despues de `make clean` en la raiz hay que regenerarlo)
+
+### Args del testbench
+
+En los ultimos hitos, el testbench se configura con argumentos:
+
+- **Por que `+NOWAVE`.** Por defecto el testbench ejecuta `$dumpfile("wave.vcd")` y `$dumpvars`, que registran todas las senales en cada ciclo. En corridas de millones de ciclos el VCD crece mucho y la simulacion se vuelve mas lenta. En los hitos 5 y 6 la evidencia es la salida de UART0 y el `RESULT`, no la forma de onda, asi que el archivo no aporta nada, por eso no lo genero
+- **Por que `+MAX_CYCLES=8000000`.** Sin el arg la simulacion no tiene techo: si el FW se cuelga, el testbench no termina nunca. Con 8M de ciclos hay un timeout, la simulacion termina y reporta `RESULT: TIMEOUT` en lugar de quedar colgada
