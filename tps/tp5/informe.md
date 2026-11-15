@@ -14,6 +14,24 @@ Se estructuró la capa de drivers separando las interfaces públicas en `fw/driv
 
 Para mi, principalmente por legibilidad y seguridad. El archivo `.h` actúa como el contrato de la interfaz pública. Lo que consuma al driver solo necesita saber qué servicios ofrece el módulo y cómo invocarlos, abstrayéndose de cómo interactúa internamente con el hardware. Esto mantiene ocultos los detalles de bajo nivel, lo que previene accesos accidentales o indebidos a los registros fuera del driver por ejemplo.
 
+### Testbench de simulación
+
+`obj_dir/Vtestbench` lo genera Verilator. Se construye una vez con:
+
+```bash
+verilator --binary --trace -Wno-fatal -f filelist.f
+```
+
+`make sim` construye y ejecuta el testbench, por eso los hitos 2, 3.a y 4 no necesitan el paso previo. En cambio, los hitos que llaman directamente a `./obj_dir/Vtestbench` (3.b, 5 y 6) requieren que el binario exista (después de `make clean` en la raíz hay que regenerarlo).
+
+### Args del testbench
+
+En los ultimos hitos, el testbench se configura con argumentos:
+
+**Por qué `+NOWAVE`.** Por defecto el testbench ejecuta `$dumpfile("wave.vcd")` y `$dumpvars`, que registran todas las señales en cada ciclo. En corridas de millones de ciclos el VCD crece mucho y la simulación se vuelve más lenta. En los hitos 5 y 6 la evidencia es la salida de UART0 y el `RESULT`, no la forma de onda, así que el archivo no aporta nada, por eso no lo genero.
+
+**Por qué `+MAX_CYCLES=8000000`.** Sin el arg la simulación no tiene techo: si el FW se cuelga, el testbench no termina nunca. Con 8M de ciclos hay un timeout, la simulación termina y reporta `RESULT: TIMEOUT` en lugar de quedar colgada.
+
 ## Hito 2: Driver de LED
 
 El periférico de LEDs cuenta con un único registro de hardware de 32 bits (`REG_LED` en `0x4_0038`) del cual solo los 8 bits menos significativos están conectados.
@@ -204,6 +222,8 @@ Se validó con la suite `fw/tests/test_uart_serial.c` y el script de prueba:
 Comandos ejecutados:
 
 ```bash
+# solo si no existe obj_dir/Vtestbench (ver "Testbench de simulación" en el Hito 1)
+verilator --binary --trace -Wno-fatal -f filelist.f
 make -C fw TARGET=test_uart_serial
 ./obj_dir/Vtestbench +UART1_SCRIPT=fw/tests/test_uart_serial.txt
 ```
@@ -358,7 +378,11 @@ Las funciones implementadas son:
 - `adc_half_done()`: devuelve el bit 0 de `REG_ADC_STATUS` (`half_done`) con una lectura no bloqueante.
 - `adc_done()`: hace una lectura bloqueante que espera hasta que el adc termina y devuelve 1.
 - `adc_read(data, size)`: valida `data` y `size`, recorta `size` a `REG_ARRAY_ADC_BUFF_SIZE`, asegura un divisor distinto de 0, dispara una captura nueva con `adc_start(1)`, espera con `adc_done()` y copia las muestras al buffer del llamador.
-  - El flujo de una lectura queda entonces: configuración del divisor → flanco de arranque → espera de fin de adquisición → copia del buffer.
+  - El flujo de una lectura queda entonces: configuración del divisor -> flanco de arranque -> espera de fin de adquisición -> copia del buffer.
+
+#### ¿De dónde salen las muestras?
+
+Mi primera duda al leer el driver fue de dónde salían los valores de `REG_ARRAY_ADC_BUFF`. La respuesta está en `rtl/adc.sv`, que genera internamente una señal senoidal (`gen_signal`), la cuantiza a 32 bits con `quantize` y, en cada `sample_tick`, guarda el código en `sample_mem[samp_cnt]`.
 
 ### 2. Decisiones técnicas
 
@@ -402,7 +426,10 @@ Se agregó el test `fw/tests/test_adc_driver.c` (sin modificar `fw/tests/test_ad
 Comandos ejecutados:
 
 ```bash
+# solo si no existe obj_dir/Vtestbench (ver "Testbench de simulación" en el Hito 1)
+verilator --binary --trace -Wno-fatal -f filelist.f
 make -C fw TARGET=test_adc_driver
+# +NOWAVE y +MAX_CYCLES: ver "Plusargs del testbench" en el Hito 1
 ./obj_dir/Vtestbench +NOWAVE +MAX_CYCLES=8000000 > fw/build/sim.log 2>&1
 make -C fw check
 ```
@@ -441,4 +468,134 @@ RESULT: PASS
 
 ## Hito 6: Integración en app de demo
 
+### 1. Paso a paso de la implementación
+
+La demo quedó en `fw/app/main.c`, que es la aplicación por defecto del proyecto (`TARGET=main`).
+
+El flujo de `main()` es:
+
+1. `uart_init()` y mensajes de inicio por UART0.
+2. **Etapa 1:** `led_init()`, `led_on(0)` como LED de inicio, `dma_init()` y `adc_init(4)`. Al terminar enciende el LED 1 y verifica `check_led_mask(0x03)`.
+3. **Etapa 2:** `led_on(2)` como LED de inicio. Arma `src[4]` con valores y `dst[4]` en cero, llama a `dma_copy(src, dst, 4)` y compara palabra por palabra. Al terminar enciende el LED 3 y verifica `check_led_mask(0x0F)`.
+4. **Etapa 3:** `led_on(4)` como LED de inicio. Llama a `adc_read(samples, 256)`, verifica que devuelva 256 muestras. Imprime las primeras 8 muestras por UART0. La variación de las muestras ya se valida en el test del ADC (Hito 5); la demo se queda con la adquisición y la lectura por API pública. Al terminar enciende el LED 5 y verifica `check_led_mask(0x3F)`.
+5. **Cierre:** `led_write(0xFF)` deja los 8 LEDs encendidos y `check_led_mask(0xFF)` lo verifica.
+6. Si todo salió bien, deja `REG_FW_STATUS = 0xFF`. En cualquier fallo imprime el error y deja `REG_FW_STATUS = 0xBAD`.
+
+El helper `check_led_mask(expected)` imprime la máscara actual con `led_get_mask()` y `print_hex`, la compara contra el valor esperado y devuelve 0 si no coincide. Así cada etapa valida su par de LEDs sin repetir el código de impresión y comparación.
+
+Los números se imprimen con `print_dec`/`print_hex`, las mismas utilidades de la biblioteca de plataforma que usa `test_drivers.c`.
+
+### 2. Decisiones técnicas
+
+Ninguna en particular
+
+### 3. Errores encontrados y resolución
+
+Ninguno
+
+### 4. Evidencia de validación
+
+Comandos ejecutados (el `verilator` solo hace falta si no existe `obj_dir/Vtestbench`, por ejemplo después de `make clean`):
+
+```bash
+verilator --binary --trace -Wno-fatal -f filelist.f
+make -C fw
+# +NOWAVE y +MAX_CYCLES: ver "Plusargs del testbench" en el Hito 1
+./obj_dir/Vtestbench +NOWAVE +MAX_CYCLES=8000000 > fw/build/sim.log 2>&1
+make -C fw check
+```
+
+Salida de la demo (fragmento normalizado):
+
+```text
+UART: [BL] TP4 bootloader: arranque desde reset (0x00000000)
+UART: [BL] buscando FW en 0x00001000
+UART: [BL]   magic      = 0x46345054
+UART: [BL]   image_size = 0x00000ADC
+UART: [BL]   crc header = 0x000000CA
+UART: [BL]   crc calc.  = 0x000000CA
+UART: [BL]   initial_sp = 0x00040000
+UART: [BL]   reset      = 0x00001018
+UART: [BL] FW OK -> salto al Reset_Handler del FW
+UART: [Etapa 1] Inicializando drivers...
+UART: Drivers inicializados. Etapa 1 completada.
+UART: LED mask = 0x03 OK
+UART: [Etapa 2] Copia de prueba y validacion de DMA...
+UART: Copia de prueba completada. Etapa 2 completada.
+UART: LED mask = 0x0F OK
+UART: [Etapa 3] Prueba de ADC...
+UART: ADC OK. Primeras 8 muestras:
+UART: 4294289097
+UART: 4284124687
+UART: 4261819456
+UART: 4227500148
+UART: 4181361771
+UART: 4123666492
+UART: 4054742149
+UART: 3974980382
+UART: LED mask = 0x3F OK
+UART: LED mask = 0xFF OK
+UART: Demo completa.
+ending simulation, u_top.u_register_file.REGISTER_FW_STATUS = 000000ff
+total clocks:              1362152
+RESULT: PASS
+```
+
+La demo completa terminó con `RESULT: PASS`, sin líneas `Txx` ni `ERROR UART0`. La secuencia `03 -> 0F -> 3F -> FF` muestra el avance de dos LEDs por etapa y el encendido final de los ocho.
+
 ## Hito 7: Cierre y validación final
+
+Se ejecutó el checklist final de la consigna haciendo `make clean` primero para borrar `obj_dir/` (el testbench de Verilator) y `fw/build/` (BL, FW e imagen).
+
+### 1. Compilación desde cero
+
+```bash
+make build_project_config
+make clean
+make fw TARGET=test_drivers
+```
+
+### 2. Test de la cátedra
+
+```bash
+make fw TARGET=test_drivers
+make sim
+```
+
+`make sim` construyó el testbench desde cero y ejecutó la simulación completa. El test recorre los cuatro drivers: LED (`w0`), DMA (`w1`), UART0 (`w2`) y ADC (`w3`). `test_drivers.c` no imprime un resumen de chequeos aprobados: solo emite un `Txx` cuando uno falla. El resto de la salida son las cadenas aleatorias con las que prueba la UART y las 256 muestras del ADC.
+
+```text
+ending simulation, u_top.u_register_file.REGISTER_FW_STATUS = 000000ff
+total clocks:              6631254
+--- mem report ---
+-- total mem access =                69307
+ READ =                39405, WRITE =                29902
+-- total instruction access =              1751052
+ READ =              1751052, WRITE =                    0
+RESULT: PASS
+```
+
+### 3. Verificación de la imagen cargada
+
+```bash
+make -C fw check
+```
+
+```text
+[hex] build/fw.hex: 2449 palabras (0x00000000-0x00002643)
+[log] build/sim.log: init_memory() cargó 2449 palabras en memory_i
+[log] OK: lo que cargó el simulador coincide palabra por palabra con fw.hex
+
+Header + vector table del FW en 0x00001000 (línea 1025 de fw.hex):
+  +0x00 magic         0x46345054 OK
+  +0x04 load_addr     0x00001000 OK
+  +0x08 image_size    0x00001644 (5700 B, hasta 0x00002643) OK
+  +0x0C image_crc     0x000000d0 (recalculado: 0x000000d0) OK
+  +0x10 initial_sp    0x00040000 <_stack_top> OK
+  +0x14 reset_handler 0x00001018 <Reset_Handler> OK
+  Reset_Handler según nm: 0x00001018 OK
+
+RESULTADO: OK
+```
+
+`make -C fw check` terminó con `RESULTADO: OK`, confirmando que el CRC y el `Reset_Handler` de la imagen cargada coinciden con `fw.hex`.
