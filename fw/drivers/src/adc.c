@@ -14,10 +14,6 @@ void adc_start(uint8_t adc_mode) {
 uint8_t adc_half_done(void) { return (REG_ADC_STATUS & 1u) != 0; }
 
 uint8_t adc_done(void) {
-  /*
-   * Bloquea hasta que la conversion termine. En w3 de test_drivers.c se llama
-   * a adc_done() sin polling y luego se verifica el bit de estado (T30).
-   */
   while ((REG_ADC_STATUS & 2u) == 0) {
   }
   return 1;
@@ -33,16 +29,22 @@ int adc_read(uint32_t *data, uint32_t size) {
   }
 
   /*
-   * Si nunca se configuro el divisor, el hardware calcula i_clk_divider - 1
-   * y el contador arranca en 0xFFFFFFFF, colgando la adquisicion.
+   * test_drivers.c nunca llama a adc_init(): w3 usa adc_read() de una y recien
+   * al final setea REG_ADC_CLK_DIVIDER, por lo que al llegar aca el registro
+   * tiene el valor 0.
+   *
+   * En rtl/adc.sv el contador se recarga con i_clk_divider - 1; con un divisor
+   * 0 arranca en 0xFFFFFFFF y la primera muestra tarda aprox 2^32 ciclos. Esto
+   * hace que la simulacion no imprima ningun Txx y que termine por MAX_CYCLES.
+   * Forzar 1 permite usar el divisor minimo valido.
    */
   if (REG_ADC_CLK_DIVIDER == 0) {
     REG_ADC_CLK_DIVIDER = 1;
   }
 
   /*
-   * adc_read siempre dispara una captura nueva (flanco 0 -> 1) y espera a que
-   * termine, sin importar el estado previo de REG_ADC_START ni del buffer.
+   * Se dispara siempre una captura nueva en vez de depender de REG_ADC_START
+   * o del bit done previos.
    */
   adc_start(1);
   adc_done();

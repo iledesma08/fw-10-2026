@@ -336,6 +336,109 @@ RESULT: PASS
 
 ## Hito 5: Driver de ADC
 
+### 1. Paso a paso de la implementación
+
+El ADC expone tres registros mapeados en memoria (`REG_ADC_START` en `0x0004002C`, `REG_ADC_STATUS` en `0x00040030` y `REG_ADC_CLK_DIVIDER` en `0x00040034`) y un buffer de 256 muestras de 32 bits en `0x00040100` (`REG_ARRAY_ADC_BUFF`).
+
+Las funciones implementadas son:
+
+- `set_adc_clk_divider(clk_div)`: escribe directamente `REG_ADC_CLK_DIVIDER`. Se agregó porque `test_drivers.c` la utiliza, aunque la consigna no la pedía explícitamente.
+- `adc_init(clk_div)`: setea el divisor y deja `REG_ADC_START = 0`.
+- `adc_start(adc_mode)`: escribe 0 en `REG_ADC_START = 0` y luego hace `adc_mode & 0x3`.El `& 0x3` descarta los bits altos y deja solo los dos controles:
+  - Bit 0 dispara la captura poniendo un 1 en `i_start[0]` del RTL. Según lo que entendí, gracias a esto, el RTL puede detectar un flanco de subida, por eso sin este bit una captura nunca arranca
+  - Bit 1 determina el tipo de captura: con 0 la captura es **single** (al completar las 256 el ADC vuelve a IDLE segun la FSM del RTL, se levanta la flag `acq_done` y el buffer conserva los datos hasta la siguiente captura) y con 1 la captura es **circular** (al completar el lote, la FSM comienza otra captura automaticamente)
+
+| `adc_mode` | Bit 1 | Bit 0 | Efecto |
+|---|---|---|---|
+| `0x0` | 0 | 0 | No arranca |
+| `0x1` | 0 | 1 | Single, arranca por flanco |
+| `0x2` | 1 | 0 | Circular, arranca por nivel |
+| `0x3` | 1 | 1 | Circular, arranca por flanco/nivel |
+
+- `adc_half_done()`: devuelve el bit 0 de `REG_ADC_STATUS` (`half_done`) con una lectura no bloqueante.
+- `adc_done()`: hace una lectura bloqueante que espera hasta que el adc termina y devuelve 1.
+- `adc_read(data, size)`: valida `data` y `size`, recorta `size` a `REG_ARRAY_ADC_BUFF_SIZE`, asegura un divisor distinto de 0, dispara una captura nueva con `adc_start(1)`, espera con `adc_done()` y copia las muestras al buffer del llamador.
+  - El flujo de una lectura queda entonces: configuración del divisor → flanco de arranque → espera de fin de adquisición → copia del buffer.
+
+### 2. Decisiones técnicas
+
+- **`adc_done()` bloqueante:** no es un simple getter del bit de estado sino espera a que la conversión termine. El test oficial llama a la funcion una sola vez y enseguida verifica que `done` valga 1, por lo que devolver el estado sin esperar no alcanza, por eso lo hice asi.
+- **Divisor mínimo en `adc_read()`:** el test nunca llama a `adc_init()`, así que el registro conserva el 0 del reset. Como el RTL recarga el contador con `divisor - 1`, un 0 produce una espera aproximada de 2^32 ciclos, asi que puse para que, si nunca se configuro el divisor, se configure con 1 que es el minimo.
+- **Arranque siempre por flanco:** `adc_read()` no depende de `REG_ADC_START` ni del bit done previos, llama siempre a `adc_start(1)`. Así cada lectura dispara una adquisición nueva, incluso si el test llama a `adc_read()` varias veces sin reiniciar el periférico.
+- **Copia acotada:** si `size` supera el tamaño del buffer se recorta a `REG_ARRAY_ADC_BUFF_SIZE` (256); si `data` es NULL o `size` es 0, se retorna 0 sin tocar el hardware.
+- **`set_adc_clk_divider()` pública:** se agregó aunque la consigna no la pida porque `test_drivers.c` la invoca.
+
+Estas decisiones están motivadas por el uso concreto que hace `test_drivers.c` (escenario `w3`) y por el comportamiento de `rtl/adc.sv`. El detalle del cuelgue y su diagnóstico está en la sección 3.
+
+### 3. Errores encontrados y resolución
+
+#### El test del ADC colgaba la simulación
+
+Al simular `test_drivers`, la simulación no imprimía ningún resultado `Txx` ni `RESULT`, y terminaba recién al agotarse `MAX_CYCLES`.
+
+Después de investigar un poco, me di cuenta que `test_drivers.c` nunca llama a `adc_init()`. El escenario `w3` usa `adc_read()` directamente y recién al final prueba `set_adc_clk_divider()`. Por lo tanto, `REG_ADC_CLK_DIVIDER` conserva el `0` del reset. Al mismo tiempo, en `rtl/adc.sv`, el bloque divisor recarga su contador con `i_clk_divider - 1`; con divisor 0, `div_cnt` arranca en `0xFFFFFFFF` y la primera muestra tarda aprox 2^32 ciclos. Esto hacia que el testbench quedara esperando indefinidamente.
+
+Con esto en mente, tome algunas decisiones:
+
+1. **`adc_read()` fuerza un divisor mínimo de 1.** Un divisor 1 es el mínimo válido del RTL y no altera el resto de la lógica.
+
+2. **`adc_read()` siempre genera un flanco de arranque.** `w3` llama a `adc_read()` varias veces seguidas sin `adc_start()` entre medio. Mi primera versión solo arrancaba si `REG_ADC_START == 0`, despues de la primera lectura el registro quedaba en 1 y las siguientes copiaban el buffer viejo sin adquirir muestras nuevas. Ahora `adc_read()` llama siempre a `adc_start(1)`, que escribe 0 y luego 1 para asegurar el flanco que detecta `rtl/adc.sv`.
+
+3. **`adc_done()` bloquea.** En `w3` se hace `adc_start(1)`, se verifica que el bit done esté en 0, se llama a `adc_done()` una única vez e inmediatamente después se exige que el bit done ya sea 1. Si `adc_done()` solo devolviera el estado actual, el test fallaría cuando la conversión aún no terminó. Por eso `adc_done()` espera dentro de la función y la consulta no bloqueante se limita a `adc_half_done()`.
+
+Con las tres correcciones, la simulación del test terminó con `RESULT: PASS`.
+
+### 4. Evidencia de validación
+
+Se agregó el test `fw/tests/test_adc_driver.c` (sin modificar `fw/tests/test_adc.c`), que valida el chequeo mínimo de la consigna:
+
+1. `adc_read(NULL, 8)` y `adc_read(samples, 0)` devuelven 0.
+2. `adc_init(4)` configura `REG_ADC_CLK_DIVIDER = 4`.
+3. `adc_read(samples, 256)` devuelve 256, deja el bit done activo y se hacen variar las muestras.
+4. Imprime las 256 muestras por UART0 con `print_dec`.
+5. Una segunda lectura con divisor 8 vuelve a disparar la adquisición.
+6. Una tercera lectura con divisor 0 fuerza el divisor a 1 y termina sin colgarse.
+
+Comandos ejecutados:
+
+```bash
+make -C fw TARGET=test_adc_driver
+./obj_dir/Vtestbench +NOWAVE +MAX_CYCLES=8000000 > fw/build/sim.log 2>&1
+make -C fw check
+```
+
+Salida (fragmento; las 256 muestras se imprimen completas):
+
+```text
+UART: [BL] TP4 bootloader: arranque desde reset (0x00000000)
+UART: [BL] buscando FW en 0x00001000
+UART: [BL]   magic      = 0x46345054
+UART: [BL]   image_size = 0x000009A0
+UART: [BL]   crc header = 0x00000031
+UART: [BL]   crc calc.  = 0x00000031
+UART: [BL]   initial_sp = 0x00040000
+UART: [BL]   reset      = 0x00001018
+UART: [BL] FW OK -> salto al Reset_Handler del FW
+UART: [TEST ADC]: Iniciando test del driver de ADC...
+UART: -- ADC data read (div=4) --
+UART: 60920390
+UART: 105105331
+UART: 160895474
+UART: 227973806
+...
+UART: -- ADC segunda lectura (div=8) OK --
+UART: -- ADC divisor 0 -> 1 OK --
+UART: [TEST ADC]: Todos los checks pasaron con exito!
+ending simulation, u_top.u_register_file.REGISTER_FW_STATUS = 000000ff
+total clocks:              4222939
+--- mem report ---
+-- total mem access =                24517
+ READ =                12619, WRITE =                11898
+-- total instruction access =              1154720
+ READ =              1154720, WRITE =                    0
+RESULT: PASS
+```
+
 ## Hito 6: Integración en app de demo
 
 ## Hito 7: Cierre y validación final
