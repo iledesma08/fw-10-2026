@@ -23,8 +23,10 @@ void adc_start(uint8_t adc_mode);
 uint8_t adc_half_done(void);
 
 /**
- * @brief Verifica si la conversión ADC ha finalizado.
- * @return 1 si la conversión está completa, 0 en caso contrario.
+ * @brief Espera a que la conversión ADC haya finalizado.
+ * @return 1 cuando la conversión está completa.
+ *
+ * Bloquea hasta que el bit de "done" del registro de estado se active.
  */
 uint8_t adc_done(void);
 
@@ -36,6 +38,10 @@ uint8_t adc_done(void);
  *
  * Si `data` es NULL o `size` es 0, la función retorna 0. Si `size` es mayor
  * que `REG_ARRAY_ADC_BUFF_SIZE`, se ajusta a ese valor máximo.
+ *
+ * La función dispara una adquisición nueva, espera a que termine y recién
+ * entonces copia el buffer. Si el divisor de reloj quedó en 0, lo configura
+ * en 1 para evitar que la conversión quede colgada.
  */
 int adc_read(uint32_t *data, uint32_t size);
 

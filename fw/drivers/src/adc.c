@@ -13,7 +13,15 @@ void adc_start(uint8_t adc_mode) {
 
 uint8_t adc_half_done(void) { return (REG_ADC_STATUS & 1u) != 0; }
 
-uint8_t adc_done(void) { return (REG_ADC_STATUS & 2u) != 0; }
+uint8_t adc_done(void) {
+  /*
+   * Bloquea hasta que la conversion termine. En w3 de test_drivers.c se llama
+   * a adc_done() sin polling y luego se verifica el bit de estado (T30).
+   */
+  while ((REG_ADC_STATUS & 2u) == 0) {
+  }
+  return 1;
+}
 
 int adc_read(uint32_t *data, uint32_t size) {
   if (data == NULL || size == 0) {
@@ -24,19 +32,20 @@ int adc_read(uint32_t *data, uint32_t size) {
     size = REG_ARRAY_ADC_BUFF_SIZE;
   }
 
-  if (!adc_done()) {
-    /*
-     * En w3 de test_drivers.c se llama a adc_read sin haber llamado a adc_start
-     * y espera que funcione, asi que supongo que adc_read se encarga de
-     * disparar la adquisicion si no se hizo todavia.
-     */
-    if (REG_ADC_START == 0) {
-      adc_start(1);
-    }
-    while (!adc_done()) {
-      // Espera a que termine la adquisición
-    }
+  /*
+   * Si nunca se configuro el divisor, el hardware calcula i_clk_divider - 1
+   * y el contador arranca en 0xFFFFFFFF, colgando la adquisicion.
+   */
+  if (REG_ADC_CLK_DIVIDER == 0) {
+    REG_ADC_CLK_DIVIDER = 1;
   }
+
+  /*
+   * adc_read siempre dispara una captura nueva (flanco 0 -> 1) y espera a que
+   * termine, sin importar el estado previo de REG_ADC_START ni del buffer.
+   */
+  adc_start(1);
+  adc_done();
 
   for (uint32_t i = 0; i < size; i++) {
     data[i] = REG_ARRAY_ADC_BUFF[i];
