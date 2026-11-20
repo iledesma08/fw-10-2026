@@ -522,9 +522,9 @@ Salida de la demo (fragmento normalizado):
 UART: [BL] TP4 bootloader: arranque desde reset (0x00000000)
 UART: [BL] buscando FW en 0x00001000
 UART: [BL]   magic      = 0x46345054
-UART: [BL]   image_size = 0x00000ADC
-UART: [BL]   crc header = 0x000000CA
-UART: [BL]   crc calc.  = 0x000000CA
+UART: [BL]   image_size = 0x00000AD4
+UART: [BL]   crc header = 0x00000090
+UART: [BL]   crc calc.  = 0x00000090
 UART: [BL]   initial_sp = 0x00040000
 UART: [BL]   reset      = 0x00001018
 UART: [BL] FW OK -> salto al Reset_Handler del FW
@@ -536,19 +536,19 @@ UART: Copia de prueba completada. Etapa 2 completada.
 UART: LED mask = 0x0F OK
 UART: [Etapa 3] Prueba de ADC...
 UART: ADC OK. Primeras 8 muestras:
-UART: 4294289097
-UART: 4284124687
-UART: 4261819456
-UART: 4227500148
-UART: 4181361771
-UART: 4123666492
-UART: 4054742149
-UART: 3974980382
+UART: 1445496950
+UART: 1294615047
+UART: 1148579314
+UART: 1008219555
+UART: 874333321
+UART: 747681382
+UART: 628983398
+UART: 518913836
 UART: LED mask = 0x3F OK
 UART: LED mask = 0xFF OK
 UART: Demo completa.
 ending simulation, u_top.u_register_file.REGISTER_FW_STATUS = 000000ff
-total clocks:              1362152
+total clocks:              1345553
 RESULT: PASS
 ```
 
@@ -556,52 +556,54 @@ La demo completa termino con `RESULT: PASS`, sin lineas `Txx` ni `ERROR UART0`. 
 
 ## Hito 7: Cierre y validacion final
 
-Se ejecuto el checklist final de la consigna haciendo `make clean` primero para borrar `obj_dir/` (el testbench de Verilator) y `fw/build/` (BL, FW e imagen)
+Luego de aplicar las modificaciones del 19-11 en DMA y ADC, se revalidaron desde cero los dos suites pedidos en el checklist final de la consigna (`test_drivers` y `test_uart_serial`) junto con la verificacion de carga de imagen
 
-### 1. Compilacion desde cero
+### `test_drivers`
+
+#### 1. Compilacion desde cero
 
 ```bash
 make build_project_config
 make clean
-make fw TARGET=test_drivers
+verilator --binary --trace -Wno-fatal -f filelist.f
+make -C fw TARGET=test_drivers
 ```
 
-### 2. Test de la catedra
+#### 2. Test de la catedra
 
 ```bash
-make fw TARGET=test_drivers
-make sim
+./obj_dir/Vtestbench +NOWAVE +MAX_CYCLES=8000000 > fw/build/sim.log 2>&1
 ```
 
-`make sim` construyo el testbench desde cero y ejecuto la simulacion completa. El test recorre los cuatro drivers: LED (`w0`), DMA (`w1`), UART0 (`w2`) y ADC (`w3`). `test_drivers.c` no imprime un resumen de chequeos aprobados: solo emite un `Txx` cuando uno falla. El resto de la salida son las cadenas aleatorias con las que prueba la UART y las 256 muestras del ADC
+El test recorre los cuatro drivers: LED (`w0`), DMA (`w1`), UART0 (`w2`), ADC (`w3`) y DMA con direcciones invalidas (`w4`). `test_drivers.c` no imprime un resumen de chequeos aprobados: solo emite un `Txx` cuando uno falla (no se emitio ninguno). El resto de la salida son las cadenas aleatorias con las que prueba la UART y las 256 muestras del ADC
 
 ```text
 ending simulation, u_top.u_register_file.REGISTER_FW_STATUS = 000000ff
-total clocks:              6631254
+total clocks:              6936543
 --- mem report ---
--- total mem access =                69307
- READ =                39405, WRITE =                29902
--- total instruction access =              1751052
- READ =              1751052, WRITE =                    0
+-- total mem access =                68287
+ READ =                37337, WRITE =                30950
+-- total instruction access =              1821013
+ READ =              1821013, WRITE =                    0
 RESULT: PASS
 ```
 
-### 3. Verificacion de la imagen cargada
+#### 3. Verificacion de la imagen cargada
 
 ```bash
 make -C fw check
 ```
 
 ```text
-[hex] build/fw.hex: 2449 palabras (0x00000000-0x00002643)
-[log] build/sim.log: init_memory() cargo 2449 palabras en memory_i
+[hex] build/fw.hex: 2603 palabras (0x00000000-0x000028ab)
+[log] build/sim.log: init_memory() cargo 2603 palabras en memory_i
 [log] OK: lo que cargo el simulador coincide palabra por palabra con fw.hex
 
 Header + vector table del FW en 0x00001000 (linea 1025 de fw.hex):
   +0x00 magic         0x46345054 OK
   +0x04 load_addr     0x00001000 OK
-  +0x08 image_size    0x00001644 (5700 B, hasta 0x00002643) OK
-  +0x0C image_crc     0x000000d0 (recalculado: 0x000000d0) OK
+  +0x08 image_size    0x000018ac (6316 B, hasta 0x000028ab) OK
+  +0x0C image_crc     0x00000019 (recalculado: 0x00000019) OK
   +0x10 initial_sp    0x00040000 <_stack_top> OK
   +0x14 reset_handler 0x00001018 <Reset_Handler> OK
   Reset_Handler segun nm: 0x00001018 OK
@@ -609,7 +611,27 @@ Header + vector table del FW en 0x00001000 (linea 1025 de fw.hex):
 RESULTADO: OK
 ```
 
-`make -C fw check` termino con `RESULTADO: OK`, confirmando que el CRC y el `Reset_Handler` de la imagen cargada coinciden con `fw.hex`
+### `test_uart_serial`
+
+```bash
+make -C fw TARGET=test_uart_serial
+./obj_dir/Vtestbench +UART1_SCRIPT=fw/tests/test_uart_serial.txt > fw/build/sim.log 2>&1
+make -C fw check
+```
+
+```text
+CHECK PASS (14/14)
+ending simulation, u_top.u_register_file.REGISTER_FW_STATUS = 00000000
+total clocks:               571787
+--- mem report ---
+-- total mem access =                25089
+ READ =                17244, WRITE =                 7845
+-- total instruction access =               143207
+ READ =               143207, WRITE =                    0
+RESULT: PASS
+```
+
+Para ambos tests, `make -C fw check` termino con `RESULTADO: OK`, confirmando que el CRC y el `Reset_Handler` de la imagen cargada coinciden con `fw.hex`
 
 ## Aclaraciones
 
@@ -621,7 +643,7 @@ RESULTADO: OK
 verilator --binary --trace -Wno-fatal -f filelist.f
 ```
 
-`make sim` construye y ejecuta el testbench, por eso los hitos 2, 3.a y 4 no necesitan el paso previo. En cambio, los hitos que llaman directamente a `./obj_dir/Vtestbench` (3.b, 5 y 6) requieren que el binario exista (despues de `make clean` en la raiz hay que regenerarlo)
+`make sim` construye y ejecuta el testbench, por eso los hitos 2, 3.a y 4 no necesitan el paso previo. En cambio, los hitos que llaman directamente a `./obj_dir/Vtestbench` (3.b, 5, 6 y 7) requieren que el binario exista (despues de `make clean` en la raiz hay que regenerarlo)
 
 ### Args del testbench
 
