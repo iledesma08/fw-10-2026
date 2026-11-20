@@ -359,7 +359,7 @@ RESULT: PASS
 
 ## Hito 5: Driver de ADC
 
-El bloque de ADC captura lotes de 256 muestras digitales de 32 bits a una frecuencia configurable mediante un divisor de reloj, permitiendo operar en modo de captura unica (single) o continua (circular) y senalizando al software tanto la mitad de la adquisicion (`half_done`) como el fin del lote (`acq_done`). 
+El bloque de ADC captura lotes de 256 muestras digitales de 32 bits a una frecuencia configurable mediante un divisor de reloj, permitiendo operar en modo de captura unica (single) o continua (circular) y senalizando al software tanto la mitad de la adquisicion (`half_done`) como el fin del lote (`acq_done`)
 
 En hardware (`rtl/adc.sv`), sintetiza y cuantiza internamente una senal analogica de prueba y guarda cada muestra en memoria interna al ritmo del `sample_tick`
 
@@ -370,9 +370,9 @@ Para configurarlo y leer las muestras, el ADC expone tres registros mapeados en 
 Fui implementando las funciones en el siguiente orden:
 
 - `adc_init(clk_div)`: setea el divisor y deja `REG_ADC_START = 0`
-- `adc_start(adc_mode)`: escribe 0 en `REG_ADC_START = 0` y luego hace `adc_mode & 0x3`.El `& 0x3` descarta los bits altos y deja solo los dos controles:
+- `adc_start(adc_mode)`: escribe 0 en `REG_ADC_START` y luego hace `adc_mode & 0x3`. El `& 0x3` descarta los bits altos y deja solo los dos controles:
   - Bit 0 dispara la captura poniendo un 1 en `i_start[0]` del RTL. Segun lo que entendi, gracias a esto, el RTL puede detectar un flanco de subida, por eso sin este bit una captura nunca arranca
-  - Bit 1 determina el tipo de captura: con 0 la captura es **single** (al completar las 256 el ADC vuelve a IDLE segun la FSM del RTL, se levanta la flag `acq_done` y el buffer conserva los datos hasta la siguiente captura) y con 1 la captura es **circular** (al completar el lote, la FSM comienza otra captura automaticamente)
+  - Bit 1 determina el tipo de captura: con 0 la captura es **single** (al completar las 256 muestras el ADC vuelve a IDLE segun la FSM del RTL, se levanta la flag `acq_done` y el buffer conserva los datos hasta la siguiente captura) y con 1 la captura es **circular** (al completar el lote, la FSM comienza otra captura automaticamente)
 
 | `adc_mode` | Bit 1 | Bit 0 | Efecto |
 |---|---|---|---|
@@ -381,11 +381,10 @@ Fui implementando las funciones en el siguiente orden:
 | `0x2` | 1 | 0 | Circular, arranca por nivel |
 | `0x3` | 1 | 1 | Circular, arranca por flanco/nivel |
 
-- `adc_half_done()`: devuelve el bit 0 de `REG_ADC_STATUS` (`half_done`) con una lectura no bloqueante
-- `adc_done()`: hace una lectura bloqueante que espera hasta que el adc termina y devuelve 1
-- `adc_read(data, size)`: valida `data` y `size`, recorta `size` a `REG_ARRAY_ADC_BUFF_SIZE`, asegura un divisor distinto de 0, dispara una captura nueva con `adc_start(1)`, espera con `adc_done()` y copia las muestras al buffer del llamador
-  - El flujo de una lectura queda entonces: configuracion del divisor -> flanco de arranque -> espera de fin de adquisicion -> copia del buffer
-- `set_adc_clk_divider(clk_div)`: escribe directamente `REG_ADC_CLK_DIVIDER`. Se agrego porque `test_drivers.c` la utiliza, aunque la consigna no la pedia explicitamente
+- `adc_half_done()`: espera de forma bloqueante a que se active el bit 0 de `REG_ADC_STATUS` (`half_done`, leido con mascara `1u`) y devuelve 1
+- `adc_done()`: espera de forma bloqueante a que se active el bit 1 de `REG_ADC_STATUS` (`acq_done`, leido con mascara `2u`) y devuelve 1
+- `adc_read(data, size)`: valida `data` y `size`, recorta `size` a `REG_ARRAY_ADC_BUFF_SIZE`, dispara una captura nueva con `adc_start(1)` usando el divisor ya configurado, espera con `adc_done()` y copia las muestras al buffer del llamador
+  - El flujo de una lectura queda entonces: divisor configurado con `adc_init` -> flanco de arranque -> espera de fin de adquisicion -> copia del buffer
 
 #### De donde salen las muestras?
 
@@ -393,17 +392,14 @@ Mi primera duda al leer el driver fue de donde salian los valores de `REG_ARRAY_
 
 ### 2. Decisiones tecnicas
 
-- **`adc_done()` bloqueante:** no es un simple getter del bit de estado, tambien espera a que la conversion termine. El test oficial llama a la funcion una sola vez y enseguida verifica que `done` valga 1, por lo que devolver el estado sin esperar no alcanza, por eso lo hice asi
-- **Divisor minimo en `adc_read()`:** el test nunca llama a `adc_init()`, asi que el registro conserva el 0 del reset. Como el RTL recarga el contador con `divisor - 1`, un 0 produce una espera aproximada de 2^32 ciclos, asi que puse para que, si nunca se configuro el divisor, se configure con 1 que es el minimo
+- **`adc_half_done()` y `adc_done()` bloqueantes:** ambas funciones esperan activamente su flag correspondiente en `REG_ADC_STATUS` usando mascara (`1u` y `2u`) y devuelven 1. En el caso de `adc_done()`, el test oficial llama a la funcion una sola vez tras `adc_start(1)` y enseguida verifica que `done` valga 1, por lo que devolver el estado sin esperar no alcanza
 - **Arranque siempre por flanco:** `adc_read()` no depende de `REG_ADC_START` ni del bit done previos, llama siempre a `adc_start(1)`. Asi cada lectura dispara una adquisicion nueva, incluso si el test llama a `adc_read()` varias veces sin reiniciar el periferico
 - **Copia acotada:** si `size` supera el tamano del buffer se recorta a `REG_ARRAY_ADC_BUFF_SIZE` (256); si `data` es NULL o `size` es 0, se retorna 0 sin tocar el hardware
-- **`set_adc_clk_divider()` publica:** se agrego aunque la consigna no la pida porque `test_drivers.c` la invoca
-
-Estas decisiones estan motivadas por el uso concreto que hace `test_drivers.c` (escenario `w3`) y por el comportamiento de `rtl/adc.sv`. El detalle del cuelgue y su diagnostico esta en la seccion 3
+- **Respeto del divisor ya configurado:** `adc_read()` adquiere con el valor presente en `REG_ADC_CLK_DIVIDER` sin sobreescribirlo ni fijar un valor por defecto, delegando la configuracion del reloj exclusivamente a `adc_init(clk_div)`
 
 ### 3. Errores encontrados y resolucion
 
-#### El test del ADC colgaba la simulacion
+#### El test del ADC colgaba la simulacion (version previa al 19-11)
 
 Al simular `test_drivers`, la simulacion no imprimia ningun resultado `Txx` ni `RESULT`, y terminaba recien al agotarse `MAX_CYCLES`
 
@@ -419,16 +415,24 @@ Con esto en mente, tome algunas decisiones:
 
 Con las tres correcciones, la simulacion del test termino con `RESULT: PASS`
 
+### Modificaciones post-cambio del 19-11
+
+La actualizacion de la catedra del 19-11 entro en conflicto directo con tres decisiones de diseno que habia tomado para hacer pasar la version anterior del test, obligando a rehacer parte del driver y sus pruebas:
+
+1. **Eliminacion de `set_adc_clk_divider()` en `adc.h` y `adc.c`:** originalmente agregue esta funcion publica porque el viejo `test_drivers.c` la invocaba en `w3()`. La catedra reemplazo esas llamadas por `adc_init(dv[j])` en `test_drivers.c` y remarco en `tp5.md` que la interfaz debe coincidir exactamente con la requerida, por lo que hubo que borrar la funcion del header y de la implementacion
+2. **Eliminacion del fallback `REG_ADC_CLK_DIVIDER == 0 -> 1` en `adc_read()`:** como `test_drivers.c` paso a llamar a `adc_init(3)` al comienzo de `w3()`, desaparecio el bug del divisor en 0 y `tp5.md` paso a exigir explicitamente que `adc_read()` adquiera con el divisor ya configurado y no fije uno propio. Se elimino el `if (REG_ADC_CLK_DIVIDER == 0)` de `adc.c` y se quito el caso de prueba del divisor 0 en `test_adc_driver.c`
+3. **Conversion de `adc_half_done()` a funcion bloqueante:** antes habia disenado `adc_half_done()` como una consulta no bloqueante del bit 0 de estado (en contraposicion a `adc_done()` bloqueante). La nueva regla de `tp5.md` establece que tanto `adc_half_done()` como `adc_done()` son bloqueantes y esperan su flag leido con mascara, por lo que se reemplazo `return (REG_ADC_STATUS & 1u) != 0;` por un lazo `while ((REG_ADC_STATUS & 1u) == 0) {}` y se sumo su validacion en `test_adc_driver.c`
+
 ### 4. Evidencia de validacion
 
 Se agrego el test `fw/tests/test_adc_driver.c` (sin modificar `fw/tests/test_adc.c`), que valida el chequeo minimo de la consigna:
 
 1. `adc_read(NULL, 8)` y `adc_read(samples, 0)` devuelven 0
 2. `adc_init(4)` configura `REG_ADC_CLK_DIVIDER = 4`
-3. `adc_read(samples, 256)` devuelve 256, deja el bit done activo y se hacen variar las muestras
+3. `adc_read(samples, 256)` devuelve 256, deja el bit done activo y las muestras varian
 4. Imprime las 256 muestras por UART0 con `print_dec`
-5. Una segunda lectura con divisor 8 vuelve a disparar la adquisicion
-6. Una tercera lectura con divisor 0 fuerza el divisor a 1 y termina sin colgarse
+5. Una segunda lectura con `adc_init(8)` vuelve a disparar la adquisicion con el nuevo divisor
+6. Con `adc_init(4)` y `adc_start(1)`, `adc_half_done()` bloquea hasta activar el bit 0 (`half_done`) y `adc_done()` bloquea hasta activar el bit 1 (`acq_done`)
 
 Comandos ejecutados:
 
@@ -447,29 +451,29 @@ Salida (fragmento; las 256 muestras se imprimen completas):
 UART: [BL] TP4 bootloader: arranque desde reset (0x00000000)
 UART: [BL] buscando FW en 0x00001000
 UART: [BL]   magic      = 0x46345054
-UART: [BL]   image_size = 0x000009A0
-UART: [BL]   crc header = 0x00000031
-UART: [BL]   crc calc.  = 0x00000031
+UART: [BL]   image_size = 0x000009C0
+UART: [BL]   crc header = 0x00000040
+UART: [BL]   crc calc.  = 0x00000040
 UART: [BL]   initial_sp = 0x00040000
 UART: [BL]   reset      = 0x00001018
 UART: [BL] FW OK -> salto al Reset_Handler del FW
 UART: [TEST ADC]: Iniciando test del driver de ADC...
 UART: -- ADC data read (div=4) --
-UART: 60920390
-UART: 105105331
-UART: 160895474
-UART: 227973806
+UART: 3049610880
+UART: 2900250368
+UART: 2746612486
+UART: 2589570234
 ...
 UART: -- ADC segunda lectura (div=8) OK --
-UART: -- ADC divisor 0 -> 1 OK --
+UART: -- ADC half_done y done bloqueantes OK --
 UART: [TEST ADC]: Todos los checks pasaron con exito!
 ending simulation, u_top.u_register_file.REGISTER_FW_STATUS = 000000ff
-total clocks:              4222939
+total clocks:              4244455
 --- mem report ---
--- total mem access =                24517
- READ =                12619, WRITE =                11898
--- total instruction access =              1154720
- READ =              1154720, WRITE =                    0
+-- total mem access =                24064
+ READ =                12338, WRITE =                11726
+-- total instruction access =              1160035
+ READ =              1160035, WRITE =                    0
 RESULT: PASS
 ```
 

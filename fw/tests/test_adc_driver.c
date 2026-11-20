@@ -2,8 +2,8 @@
  * Test del driver de ADC para el Hito 5 del TP5
  *
  * Chequeo minimo pedido: obtener una lectura del ADC e imprimirla por UART.
- * Ademas se validan los casos borde del driver y se cubre el divisor 0, que
- * es el que colgaba la simulacion antes de la correccion
+ * Ademas se validan los casos borde del driver y la espera bloqueante de
+ * adc_half_done() y adc_done()
  */
 #include "adc.h"
 #include "includes.h"
@@ -81,7 +81,7 @@ int main(void) {
   print_samples(samples, REG_ARRAY_ADC_BUFF_SIZE);
 
   /* 5. Otra lectura con distinto divisor: adc_read debe disparar de nuevo */
-  set_adc_clk_divider(8);
+  adc_init(8);
   n = adc_read(samples, REG_ARRAY_ADC_BUFF_SIZE);
   if (n != REG_ARRAY_ADC_BUFF_SIZE) {
     return fail("la segunda lectura no devolvio 256 muestras");
@@ -91,23 +91,26 @@ int main(void) {
   }
   print_str("-- ADC segunda lectura (div=8) OK --\n");
 
-  /* 6. Divisor 0: el driver debe forzar 1 y no colgarse */
-  set_adc_clk_divider(0);
-  n = adc_read(samples, REG_ARRAY_ADC_BUFF_SIZE);
-  if (n != REG_ARRAY_ADC_BUFF_SIZE) {
-    return fail("la lectura con divisor 0 no devolvio 256 muestras");
+  /* 6. Espera bloqueante de half_done y done con adc_start(1) */
+  adc_init(4);
+  adc_start(1);
+  if (adc_half_done() != 1) {
+    return fail("adc_half_done no retorno 1");
   }
-  if (REG_ADC_CLK_DIVIDER != 1) {
-    return fail("el divisor 0 no se corrigio a 1");
+  if ((REG_ADC_STATUS & 1u) == 0) {
+    return fail("el bit half_done no quedo activo tras adc_half_done");
   }
-  if (!samples_vary(samples, REG_ARRAY_ADC_BUFF_SIZE)) {
-    return fail("la lectura con divisor 0 no varia");
+  if (adc_done() != 1) {
+    return fail("adc_done no retorno 1");
   }
-  print_str("-- ADC divisor 0 -> 1 OK --\n");
+  if ((REG_ADC_STATUS & 2u) == 0) {
+    return fail("el bit done no quedo activo tras adc_done");
+  }
+  print_str("-- ADC half_done y done bloqueantes OK --\n");
 
+  print_str("[TEST ADC]: Todos los checks pasaron con exito!\n");
   REG_FW_REPORT = 0xADC0;
   REG_FW_STATUS = 0xFF;
-  print_str("[TEST ADC]: Todos los checks pasaron con exito!\n");
 
   return 0;
 }
