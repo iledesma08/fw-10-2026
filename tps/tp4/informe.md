@@ -1,5 +1,7 @@
 # TP4
 
+**Autor:** Ignacio Ledesma
+
 ### Excepcion del RTL
 
 En `rtl/testbench.sv`, la senal `wire trap;` se encontraba desconectada. Los escenarios de fallo como la ejecucion en modo standalone de `test_data_bss` imprimian `FAIL` y ejecutaban `ebreak`, pero la simulacion no concluia y continuaba indefinidamente. La situacion se resolvio conectando la senal del procesador mediante `wire trap = u_top.trap;`.

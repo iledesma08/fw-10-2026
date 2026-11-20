@@ -1,5 +1,7 @@
 # TP5: Drivers de perifericos
 
+**Autor:** Ignacio Ledesma
+
 ## Hito 1: Preparacion del proyecto
 
 Se estructuro la capa de drivers separando las interfaces publicas en `fw/drivers/inc/` y las implementaciones privadas en `fw/drivers/src/`:
