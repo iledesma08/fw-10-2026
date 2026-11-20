@@ -272,7 +272,7 @@ Fui implementando las funciones en el siguiente orden:
 - `dma_init()`: pone `REG_DMA_START` en 0 para garantizar que el DMA quede listo para detectar el proximo flanco ascendente y asi comenzar la copia
 - `dma_is_done()`: verifica si la operacion de copia del DMA ha finalizado (1 si la transferencia finalizo o esta inactivo, 0 si esta transfiriendo datos)
 - `dma_copy(src, dst, n_words)`:
-  1. **Politica de seguridad:** verifica que `n_words > 0`, que ni `src` ni `dst` sean `NULL`, que `src != dst`, y que ambas direcciones esten alineadas a 4 bytes (`((uintptr_t)addr & 0x3) == 0`). Si alguna condicion falla, retorna inmediatamente sin modificar el hardware ni la memoria
+  1. **Politica de seguridad:** verifica que `n_words > 0`, que ni `src` ni `dst` sean `NULL`, que `src != dst`, que ambas direcciones esten alineadas a 4 bytes (`((uintptr_t)addr & 0x3) == 0`) y, mediante la funcion auxiliar `dma_range_valid`, que todo el rango `[addr, addr + n_words * 4)` caiga dentro del mapa valido (`0x00000000` a `0x0005FFFF`). Si alguna condicion falla, retorna inmediatamente sin modificar el hardware ni la memoria
   2. Escribe las direcciones numericas en `REG_DMA_SOURCE_ADDR` y `REG_DMA_DEST_ADDR`, y la cantidad de palabras en `REG_DMA_SIZE`
   3. Genera un flanco de subida escribiendo 0 y luego 1 en `REG_DMA_START`
   4. Espera activamente con `while (!dma_is_done())` hasta que el periferico complete la rafaga
@@ -303,6 +303,15 @@ Aunque el bloque de DMA funciona de forma asincronica en hardware, la funcion `d
 
 Ninguno
 
+### Modificaciones post-cambio del 19-11
+
+En la version original de la consigna, no se especificaba que direcciones eran invalidas, ni se indicaba el comportamiento del bus fuera del mapa de memoria. Con la actualizacion del 19-11 (nueva regla en `tp5.md` y agregado de `w4()` en `test_drivers.c`), se paso a exigir explicitamente que `dma_copy` rechace transferencias cuyo rango salga de 0x00000000 - 0x0005FFFF
+
+Para adaptar el driver y sus pruebas a este requisito agregado a ultimo momento se realizaron los siguientes cambios:
+
+1. **Validacion de rango en `dma.c`:** se agrego la funcion auxiliar `dma_range_valid(addr, n_words)`, que verifica `DMA_MEM_START <= addr < DMA_MEM_END` (`0x00000000` a `0x00060000`, a partir de `ADDR_START_INST`, `ADDR_START_REG_FILE` y `ADDR_SIZE_REG_FILE` de `fw/config.h`) y controla que `n_words <= ((DMA_MEM_END - addr) >> 2)`, es decir, que la cantidad de palabras a copiar no supere las palabras disponibles desde `addr` hasta el limite del mapa
+2. **Ampliacion de `fw/tests/test_dma_driver.c`:** se sumaron casos de prueba con `src` y `dst` fuera del mapa (`0x00100000`) y con una transferencia que inicia dentro del mapa pero cruza el limite superior (`0x0005FFF8` con 4 palabras)
+
 ### 4. Evidencia de validacion
 
 Se implemento el test unitario `fw/tests/test_dma_driver.c`, el cual valida:
@@ -313,6 +322,7 @@ Se implemento el test unitario `fw/tests/test_dma_driver.c`, el cual valida:
    - Punteros nulos (`src == NULL` y `dst == NULL`): retorna sin modificaciones en memoria
    - Direcciones no alineadas (offsets de 1 y 2 bytes): verifica que la operacion no se realice y cause transferencias erroneas
    - Punteros identicos (`src == dst`): no realiza ninguna operacion redundante
+   - Direcciones fuera del mapa (`0x00100000` en origen y destino) y cruce de frontera (`0x0005FFF8` con 4 palabras): verifica que no dispare la transferencia ni altere memoria
 3. Multiples copias sucesivas con tamanos variables (de 1 a 16 palabras) para comprobar que el driver maneje transferencias consecutivas sin trabarse
 
 Comandos ejecutados:
@@ -328,21 +338,21 @@ Salida de la simulacion:
 UART: [BL] TP4 bootloader: arranque desde reset (0x00000000)
 UART: [BL] buscando FW en 0x00001000
 UART: [BL]   magic      = 0x46345054
-UART: [BL]   image_size = 0x000006F8
-UART: [BL]   crc header = 0x0000003F
-UART: [BL]   crc calc.  = 0x0000003F
+UART: [BL]   image_size = 0x0000078C
+UART: [BL]   crc header = 0x00000037
+UART: [BL]   crc calc.  = 0x00000037
 UART: [BL]   initial_sp = 0x00040000
 UART: [BL]   reset      = 0x00001018
 UART: [BL] FW OK -> salto al Reset_Handler del FW
 UART: [TEST DMA]: Iniciando test del driver de DMA...
 UART: [TEST DMA]: Todos los checks pasaron con exito!
 ending simulation, u_top.u_register_file.REGISTER_FW_STATUS = 000000ff
-total clocks:               810515
+total clocks:               875954
 --- mem report ---
--- total mem access =                 4506
- READ =                 3304, WRITE =                 1202
--- total instruction access =               189554
- READ =               189554, WRITE =                    0
+-- total mem access =                 4660
+ READ =                 3455, WRITE =                 1205
+-- total instruction access =               204726
+ READ =               204726, WRITE =                    0
 RESULT: PASS
 - rtl/testbench.sv:123: Verilog $finish
 ```

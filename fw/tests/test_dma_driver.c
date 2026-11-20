@@ -105,6 +105,30 @@ int main(void) {
     return -1;
   }
 
+  /* 3.f Direccion fuera del mapa (src no mapeado) */
+  dst_buf[0] = 0x778899AA;
+  dma_copy((const void *)0x00100000u, dst_buf, 16);
+  if (dst_buf[0] != 0x778899AA) {
+    REG_FW_STATUS = 0xBAD;
+    return -1;
+  }
+
+  /* 3.g Direccion fuera del mapa (dst no mapeado) */
+  src_buf[0] = 0xBBCCDDEE;
+  dma_copy(src_buf, (void *)0x00100000u, 16);
+  if (src_buf[0] != 0xBBCCDDEE) {
+    REG_FW_STATUS = 0xBAD;
+    return -1;
+  }
+
+  /* 3.h Rango que empieza adentro pero cruza el limite 0x00060000 */
+  dst_buf[0] = 0x12345678;
+  dma_copy((const void *)0x0005FFF8u, dst_buf, 4);
+  if (dst_buf[0] != 0x12345678) {
+    REG_FW_STATUS = 0xBAD;
+    return -1;
+  }
+
   /* 4. Copias de tamano variable (multiples transferencias sucesivas) */
   for (uint32_t size = 1; size <= 16; size++) {
     for (uint32_t i = 0; i < size; i++) {

@@ -18,8 +18,9 @@ void dma_init(void);
  * @param dst Direccion de destino de la copia
  * @param n_words Numero de palabras (4 bytes cada una) a copiar
  *
- * Si n_words es 0, src o dst son NULL, src y dst son iguales, o si las
- * direcciones no estan alineadas a 4 bytes, la funcion no realiza ninguna
+ * Si n_words es 0, src o dst son NULL, src y dst son iguales, las direcciones
+ * no estan alineadas a 4 bytes, o el rango [addr, addr + n_words * 4) sale de
+ * la zona mapeada (0x00000000 a 0x0005FFFF), la funcion no realiza ninguna
  * accion
  *
  * @warning Los buffers src y dst no deben solaparse con dst > src. El hardware
